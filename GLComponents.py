@@ -490,9 +490,10 @@ class FileDrivenMaze(ParameterFile):
         self.leds = []
         
         # Load the Parameter File (initializes several attributes)
+        self.last_goal = -1
         self.alpha = 0.5
         self.beta = -0.5
-        self.gamma = 0.9
+        self.gamma = 0.8
         self.delta = 0.01
         super(FileDrivenMaze, self).__init__(filepath)
         
@@ -583,7 +584,9 @@ class FileDrivenMaze(ParameterFile):
         
         # Check the Arm Selection Mode
         goal = None
-        if self.goal_selection_mode or self.goals != 1:
+        if self.goals == 1 and self.last_goal > -1:
+            self.goal = [possible_goals[self.last_goal - 1]]
+        elif self.goal_selection_mode or self.goals != 1:
             # Get the Probability Distribution
             P = self.get_goal_probabilities(possible_goals)
             
@@ -647,6 +650,7 @@ class FileDrivenMaze(ParameterFile):
         
         # Track the Selected Goal
         self.goal = goal
+        if self.goals == 1 and self.last_goal > -1: self.last_goal = self.goal[0].index
         self.stats.this_goal = 0
         for g in goal: self.goal_counts[g.index - 1] += 1
         self._disp_goal_block_info()

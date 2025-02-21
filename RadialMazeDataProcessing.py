@@ -8,7 +8,7 @@ Created on Fri Jan 31 14:25:33 2025
 # Import Libraries
 import numpy as np
 import matplotlib.pyplot as plt
-from Modules.OSTools import search, readlines
+from Modules.Utils import search, readlines
 from Modules.ParameterFileInterface import ParameterFile, Parser
 import platform
 import time
@@ -181,6 +181,10 @@ class Trial:
                 return f"Trial[{self.outer.well} {int(self.rewarded)}]"
         else:
             return "Trial[Incomplete]"
+    
+    def has_pokes(self) -> bool:
+        """A Basic Check for if the Trial Contains Any Data"""
+        return self.home or self.other or self.lockouts
     
     def to_table_entry(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
         """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
