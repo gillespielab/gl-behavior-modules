@@ -163,6 +163,7 @@ class Poke:
 class Trial:
     
     current = None
+    trial_num = 1
     
     def __init__(self, block = None, home_poke:Poke = None, outer_poke:Poke = None, lockout_pokes:list = None):
         
@@ -174,7 +175,8 @@ class Trial:
         self.lockouts = [] if lockout_pokes == None else lockout_pokes
         self.block = block
         self.index = len(block.trials) if block else -1
-        self.trial_num = self.index + 1
+        self.trial_num = Trial.trial_num
+        Trial.trial_num += 1
         self.reps_remaining = -1
         self.search_mode = 0
         
@@ -254,7 +256,7 @@ class Trial:
             self.start, 
             self.end, 
             int(self.rewarded), 
-            int(self.home.search_mode), 
+            int(self.search_mode), 
             self.outer.well if self.outer else None, 
             self.goal, 
             self.reps_remaining, 
