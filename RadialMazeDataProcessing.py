@@ -296,7 +296,7 @@ class Trial:
         self.complete = bool(self.home) and bool(self.outer)
         
         # Update the Rewarded Flag
-        self.rewarded = self.outer and self.outer.rewarded
+        self.rewarded = bool(self.outer and self.outer.rewarded)
         
         # Update the End Time
         if self.lockouts:
@@ -471,7 +471,7 @@ class Block:
             reps_remaining = self.outreps
             for t in self.trials:
                 t.reps_remaining = reps_remaining
-                reps_remaining -= t.rewarded
+                if t.rewarded: reps_remaining -= 1
         elif self.trials and self.trials[0].reps_remaining > 0:
             self.outreps = self.trials[0].reps_remaining
             if complete == None:
