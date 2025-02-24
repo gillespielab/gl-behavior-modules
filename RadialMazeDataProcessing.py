@@ -120,10 +120,10 @@ class Poke:
         self.end = end_time
     
     def __repr__(self):
-        return f"Poke[Well = {self.well}, Rewarded = {int(self.rewarded)}]"
+        return f"Poke[Well = {self.well}, Rewarded = {1 if self.rewarded else 0}]"
     
     def __str__(self):
-        return f"Poke[{self.well} {int(self.rewarded)}]"
+        return f"Poke[{self.well} {1 if self.rewarded else 0}]"
     
     def __hash__(self):
         return id(self)
@@ -164,7 +164,7 @@ class Trial:
     
     current = None
     
-    def __init__(self, block, home_poke:Poke = None, outer_poke:Poke = None, lockout_pokes:list = None):
+    def __init__(self, block = None, home_poke:Poke = None, outer_poke:Poke = None, lockout_pokes:list = None):
         
         if Trial.current: Trial.current._on_load()
         Trial.current = self
@@ -207,6 +207,45 @@ class Trial:
         """A Basic Check for if the Trial Contains Any Data"""
         return self.home or self.outer or self.lockouts
     
+    def add_home(self, poke:Poke = None) -> None:
+        """Add a Home Poke"""
+        self.home = poke if poke else Poke.current
+        self.search_mode = self.home.search_mode
+        self.start = self.home.start
+        
+        # Update the Goal
+        if not self.goal and self.block: self.goal = self.block.goal
+    
+    def add_outer(self, poke:Poke = None) -> None:
+        """Add an Outer Poke"""
+        # Add the Poke and Update the Flags
+        self.outer = poke if poke else Poke.current
+        self.complete = bool(self.home)
+        self.rewarded = self.outer.rewarded
+        
+        # Update the Goal
+        if not self.goal and self.block: self.goal = self.block.goal
+        
+        # Switch the Associated Goal Block
+        if not self.block.first_trial_adjusted and self.index == 0 and Block.previous and self.outer.well in Block.previous.goal:
+            self.index = len(Block.previous.trials)
+            self.search_mode = 0
+            self.reps_remaining = 0
+            self.block.trials.pop(0)
+            self.block = Block.previous
+            self.block.trials.append(self)
+            self.block.first_trial_adjusted = True
+            for i, trial in enumerate(Block.current.trials):
+                trial.index = i
+    
+    def add_lockout(self, poke:Poke = None) -> None:
+        """Add a Lockout Poke"""
+        # Add the Lockout
+        self.lockouts.append(poke if poke else Poke.current)
+        
+        # Update the Goal
+        if not self.goal and self.block: self.goal = self.block.goal
+    
     def to_table_entry(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
         """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
         include_index |= index != None
@@ -236,12 +275,12 @@ class Trial:
         trial.rewarded = entry[4]
         trial.goal = entry[7]
         trial.reps_remaining = entry[8]
-        trial.home = Poke(home_well, True, entry[5], 0, entry[7], trial.start, entry[9], trial)
+        trial.add_home(Poke(home_well, True, entry[5], 0, entry[7], trial.start, entry[9], trial))
         if entry[6] != None:
-            trial.outer = Poke(entry[6], trial.rewarded, entry[5], 1, entry[7], entry[10], entry[11], trial)
+            trial.add_outer(Poke(entry[6], trial.rewarded, entry[5], 1, entry[7], entry[10], entry[11], trial))
         phase = 0
         for well, t_start, t_end in entry[12]:
-            trial.lockouts.append(Poke(well, 0, entry[5], phase, entry[7], t_start, t_end, trial))
+            trial.add_lockout(Poke(well, 0, entry[5], phase, entry[7], t_start, t_end, trial))
             phase = 2
         
         trial.complete = trial.outer != None # trial._on_load()
@@ -257,7 +296,7 @@ class Trial:
         self.complete = bool(self.home) and bool(self.outer)
         
         # Update the Rewarded Flag
-        if self.outer: self.rewarded = self.outer.rewarded
+        self.rewarded = self.outer and self.outer.rewarded
         
         # Update the End Time
         if self.lockouts:
@@ -302,11 +341,11 @@ class Trial:
                 poke = Poke(*Poke.parser(lines[i].text), None, self)
                 
                 if not self.home:
-                    self.home = poke
+                    self.add_home(poke)
                 elif not self.outer:
-                    self.outer = poke
+                    self.add_outer(poke)
                 else:
-                    self.lockouts.append(poke)
+                    self.add_lockout(poke)
             
             # Increment the Line Index
             i += 1
@@ -375,6 +414,8 @@ class Block:
         if Block.current: 
             Block.current._on_load()
             self.previous_goal = Block.current.goal
+        if Block.previous and not Block.previous.complete:
+            Block.previous._on_load()
         Block.previous = Block.current
         Block.current = self
         self.previous_goal = None
@@ -438,21 +479,6 @@ class Block:
                 return
         
         self.complete = (not reps_remaining) if complete == None else complete
-        
-        # Check if the First Search Trial should be the Last Repeat Trial
-        if not self.first_trial_adjusted and self.index > 0 and self.epoch and self.epoch.parameters.goals == 1 and self.trials:
-            self.first_trial_adjusted = True
-            previous_block = self.epoch.blocks[self.index - 1]
-            trial = self.trials[0]
-            if trial.outer and [trial.outer.well] == self.previous_goal:
-                trial.index = len(previous_block.trials)
-                trial.search_mode = 0
-                trial.reps_remaining = 0
-                if trial.home: trial.home.search_mode = 0
-                previous_block.append(trial)
-                self.trials.pop(0)
-                for i, t in enumerate(self.trials):
-                    t.index = i
         
         self.compute_stats()
     
