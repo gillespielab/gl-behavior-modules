@@ -101,15 +101,21 @@ Objects for Containing the Parsed Data in a Convenient Format, and for Calulatin
 
 class Poke:
     parser = Parser("poke: ({int}, {bool}, {bool}, {int}, [{[int, ', ']}], {int})")
+    
+    current = None
+    
     def __init__(self, well:int, rewarded:bool, search_mode:bool, maze_phase:int, goal:list, start_time:int = None, end_time:int = None, trial = None):
         """A Data Object for a Single Reward Well Poke"""
+        
+        Poke.current = self
+        
         self.well = well
         self.goal = goal
         self.rewarded = rewarded
         self.phase = maze_phase
         self.search_mode = search_mode
         self.is_home = well == home_well
-        self.trial = trial
+        self.trial = Trial.current if trial == None else trial
         self.start = start_time
         self.end = end_time
     
@@ -155,7 +161,14 @@ class Poke:
         return x + 1
 
 class Trial:
+    
+    current = None
+    
     def __init__(self, block, home_poke:Poke = None, outer_poke:Poke = None, lockout_pokes:list = None):
+        
+        if Trial.current: Trial.current._on_load()
+        Trial.current = self
+        
         self.home = home_poke
         self.outer = outer_poke
         self.lockouts = [] if lockout_pokes == None else lockout_pokes
@@ -165,12 +178,20 @@ class Trial:
         self.reps_remaining = -1
         self.search_mode = 0
         
+        self.goal = self.block.goal if self.block else None
+        
         self.start = home_poke.start if home_poke else None
         self.end = None
         self.complete = False
         self.rewarded = False
         
         self.lines = []
+        
+        # Update the Trial Pointers
+        if self.home: self.home.trial = self
+        if self.outer: self.outer.trial = self
+        if self.lockouts:
+            for poke in self.lockouts: poke.trial = self
     
     def __repr__(self) -> str:
         if self.complete:
@@ -184,7 +205,7 @@ class Trial:
     
     def has_pokes(self) -> bool:
         """A Basic Check for if the Trial Contains Any Data"""
-        return self.home or self.other or self.lockouts
+        return self.home or self.outer or self.lockouts
     
     def to_table_entry(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
         """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
@@ -196,7 +217,7 @@ class Trial:
             int(self.rewarded), 
             int(self.home.search_mode), 
             self.outer.well if self.outer else None, 
-            self.block.goal, 
+            self.goal, 
             self.reps_remaining, 
             self.home.end if self.home else None, 
             self.outer.start if self.outer else None, 
@@ -213,6 +234,7 @@ class Trial:
         trial.start = entry[2]
         trial.end = entry[3]
         trial.rewarded = entry[4]
+        trial.goal = entry[7]
         trial.reps_remaining = entry[8]
         trial.home = Poke(home_well, True, entry[5], 0, entry[7], trial.start, entry[9], trial)
         if entry[6] != None:
@@ -245,16 +267,12 @@ class Trial:
         elif self.home:
             self.end = self.home.end
         
+        # Update the Goal
+        if not self.goal and self.block: self.goal = self.block.goal
+        
         # Update the Search Mode
         if self.home:
             self.search_mode = self.home.search_mode
-        if self.outer and self.index == 0 and self.block.index > 0 and self.outer.well in self.block.epoch.blocks[self.block.index - 1].goal:
-            self.search_mode = 0
-            if self.home: self.home.search_mode = 0
-            self.outer.search_mode = 0
-            lockout_sm = 0 if self.outer.rewarded else 1
-            for poke in self.lockouts:
-                poke.search_mode = lockout_sm
     
     def _load_from_log(self, lines:list, start:int) -> int:
         self.home = None
@@ -349,11 +367,23 @@ class Phases:
 class Block:
     info_parser = Parser("new goal block: [goal = [{[int ', ']}], outreps = {int}]")
     
-    def __init__(self, epoch, block_index:int = None):
+    current = None
+    previous = None
+    
+    def __init__(self, epoch = None, block_index:int = None):
+        
+        if Block.current: 
+            Block.current._on_load()
+            self.previous_goal = Block.current.goal
+        Block.previous = Block.current
+        Block.current = self
+        self.previous_goal = None
+        
         self.index = block_index if block_index != None else len(epoch.blocks)
-        self.epoch = epoch
+        self.epoch = Epoch.current if epoch == None else epoch
         
         self.goal = None
+        self.prev_goal = None
         self.outreps = None
         
         self.lines = []
@@ -367,6 +397,7 @@ class Block:
         self.end = None
         
         self.complete = False
+        self.first_trial_adjusted = False
         
         self.phase_params = None
     
@@ -383,6 +414,9 @@ class Block:
     def has_trials(self) -> bool:
         return len(self) > 0
     
+    def has_pokes(self) -> bool:
+        return any(t.has_pokes() for t in self.trials)
+    
     def __bool__(self): 
         return True # if this doesn't exist, then bool(self) = bool(len(self)) = len(self) > 0, which gives weird behavior
     
@@ -391,18 +425,34 @@ class Block:
     
     def _on_load(self, complete:bool = None):
         """Code to Run After Loading the Data"""
-        
         reps_remaining = True
-        if self.outreps:
+        if complete == None and self.outreps:
             reps_remaining = self.outreps
             for t in self.trials:
                 t.reps_remaining = reps_remaining
                 reps_remaining -= t.rewarded
         elif self.trials and self.trials[0].reps_remaining > 0:
             self.outreps = self.trials[0].reps_remaining
-            self._on_load()
+            if complete == None:
+                self._on_load() # self.outreps evals to True in the recursion since reps_remaining > 0
+                return
         
-        self.complete = not reps_remaining if complete == None else complete
+        self.complete = (not reps_remaining) if complete == None else complete
+        
+        # Check if the First Search Trial should be the Last Repeat Trial
+        if not self.first_trial_adjusted and self.index > 0 and self.epoch and self.epoch.parameters.goals == 1 and self.trials:
+            self.first_trial_adjusted = True
+            previous_block = self.epoch.blocks[self.index - 1]
+            trial = self.trials[0]
+            if trial.outer and [trial.outer.well] == self.previous_goal:
+                trial.index = len(previous_block.trials)
+                trial.search_mode = 0
+                trial.reps_remaining = 0
+                if trial.home: trial.home.search_mode = 0
+                previous_block.append(trial)
+                self.trials.pop(0)
+                for i, t in enumerate(self.trials):
+                    t.index = i
         
         self.compute_stats()
     
@@ -621,7 +671,12 @@ class Epoch:
     Parser.add_datatype('rmTrials', rmTrialParser)
     rmTDFileParser = Parser("{rmParams}\n{[rmTrials, '\n']}")
     
+    current = None
+    
     def __init__(self, filepath:str = None, rat = None, index:int = None):
+        
+        Epoch.current = self
+        
         # Initialize the Main Attributes
         self.name = None
         self.date = None
@@ -876,9 +931,6 @@ class Epoch:
         for entry in trials:
             # Check if a New Goal Block has Started
             if entry[8] != goal:
-                # Flag the Last Block as Completed
-                if block: block._on_load(True)
-                
                 # Create a Blank Block
                 block = Block(self)
                 self.blocks.append(block)
