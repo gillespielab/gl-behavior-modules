@@ -230,13 +230,15 @@ class Trial:
         
         # Switch the Associated Goal Block
         if not self.block.first_trial_adjusted and self.index == 0 and Block.previous and self.outer.well in Block.previous.goal:
+            self.block.first_trial_adjusted = True
             self.index = len(Block.previous.trials)
             self.search_mode = 0
+            self.home.search_mode = 0
+            self.outer.search_mode = 0
             self.reps_remaining = 0
             self.block.trials.pop(0)
             self.block = Block.previous
             self.block.trials.append(self)
-            self.block.first_trial_adjusted = True
             for i, trial in enumerate(Block.current.trials):
                 trial.index = i
     
