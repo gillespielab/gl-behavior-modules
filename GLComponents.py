@@ -8,7 +8,8 @@ Created on Wed Jan 15 12:34:28 2025
 # Import Libraries
 import time
 import numpy as np
-from numpy.random import randint, choice, shuffle
+from numpy.random import choice, shuffle
+from random import randint #  not taken from numpy so that it includes both endpoints
 from collections import defaultdict
 try:
     from Modules import StateScriptInterface as ssi
@@ -41,7 +42,7 @@ Reward Wells
 class Pump(ssi.Port):
     """An Object which Manages Delivering Reward via a Pump (auto-generated when creating Wells)"""
     
-    updates_enabled_default = False
+    updates_enabled_default = True
     
     def __init__(self, port:int, reward_function:int, rewarded_pump_var_name:str = None, updates_off:bool = None):
         """
@@ -68,6 +69,10 @@ class Pump(ssi.Port):
         # Initialize Pump-Specific Attributes
         self.reward_function = ssi.functions[reward_function] if reward_function in ssi.functions else reward_function
         self.rewarded_pump_var_name = ssi._null_coalescing(rewarded_pump_var_name, wells.default_reward_pump_var_name)
+        
+        # Turn Off Updates
+        if updates_off:
+            self.updates_off()
     
     def deliver_reward(self):
         """Deliver a Reward Using the Stored Parameters"""
@@ -490,12 +495,26 @@ class FileDrivenMaze(ParameterFile):
         self.leds = []
         
         # Load the Parameter File (initializes several attributes)
-        self.last_goal = -1
+        self.first_goal = True
+        self.last_goal = None
         self.alpha = 0.5
         self.beta = -0.5
         self.gamma = 0.8
         self.delta = 0.01
         super(FileDrivenMaze, self).__init__(filepath)
+        
+        # Pre-Compute Adjusted Versions of the Arm Selection Parameters
+        arms = self.arms if hasattr(self, 'arms') else len(self.rewarded_visits)
+        self.delta_prime = self.delta / (1 - arms * self.delta)
+        outreps = sum(self.outreps)/len(self.outreps) if hasattr(self.outreps, '__iter__') else self.outreps
+        trials = self.max_trials if self.max_trials > -1 else outreps * self.goal_blocks / self.success_threshold
+        self.gamma_prime = self.gamma ** (1 / trials)
+        
+        # Check for Bad Parameter Combos
+        if max(self.goals, self.forageassist) > abs(self.cues):
+            goal_str = "goals" if self.goals >= self.forageassits else "forageassisted goals"
+            goals = max(self.goals, self.forageassist)
+            raise ValueError(f"Number of Cues ({abs(self.cues)}) must be greater than the number of {goal_str} ({goals})")
         
         # Initialize Attributes which Are Calculated from the Parameter File
         self.possible_goal_count = len(self.total_visits)
@@ -520,11 +539,11 @@ class FileDrivenMaze(ParameterFile):
             ssi.disp(f"unrecognized value for outreps. defaulting to {outreps}")
             return outreps
     
-    def _get_weighted_visits(self):
-        all_pokes_this_epoch = np.array([w.pokes for w in self.outer_wells])
-        rewarded_pokes_this_epoch = np.array([w.rewards for w in self.outer_wells])
-        combined_pokes = self.alpha * rewarded_pokes_this_epoch + (1 - self.alpha) * (all_pokes_this_epoch - rewarded_pokes_this_epoch)
-        return (1 - self.gamma) * combined_pokes + self.gamma * np.array(self.weighted_visits)
+    def updated_weighted_visits(self, well_index:int, rewarded:bool):
+        w = self.alpha if rewarded else 1 - self.alpha
+        for i in range(len(self.weighted_visits)):
+            self.weighted_visits[i] *= self.gamma_prime
+        self.weighted_visits[well_index - 1] += w * (1 - self.gamma)
     
     def get_goal_probabilities(self, possible_goals:list):
         """Get the Selection Probability for Each Possible Goal"""
@@ -537,21 +556,19 @@ class FileDrivenMaze(ParameterFile):
             visits = self.alpha * rewarded_visits + (1 - self.alpha)*(total_visits - rewarded_visits)
             return softmax(visits - np.min(visits) + 1, self.beta)
         elif self.goal_selection_mode == 2:
-            weighted_visits = self._get_weighted_visits()
-            return softmax(np.array(weighted_visits) - np.min(weighted_visits) + 1, self.beta)
+            return softmax(np.array(self.weighted_visits) - np.min(self.weighted_visits) + 1, self.beta)
         else:
             raise ValueError(f"unrecognized arm selection mode: {self.goal_selection_mode}")
         
-        # Exclude the Current Goal
-        excluded_goal = self.goal[0] if self.goals == 1 and self.goal else None
-        if excluded_goal: P[excluded_goal.index] = 0
-        
         # Apply the Lower Bound
-        s = (np.sum(P) + len(P) * self.delta)
-        P += self.delta / s
+        P += self.delta_prime
+        
+        # Exclude the Current Goal
+        if self.goals == 1 and self.goal:
+            P[self.goal[0].index] = 0
         
         # Normalize and Return the Probabilities
-        return P / s # np.sum(P)
+        return P / np.sum(P)
     
     def _disp_goal_block_info(self):
         # this ensures that this string is always idential (for ease of parsing later)
@@ -582,10 +599,38 @@ class FileDrivenMaze(ParameterFile):
             self._disp_goal_block_info()
             return
         
+        # Choose a Goal From the Goal Sequence
+        def selection_mode_0():
+            # Get the Next Goal
+            goal = [wells[self.goal_sequence.pop()]]
+            
+            # Generate a New Sequence if Necessary
+            if not self.goal_sequence:
+                # Initialize a New Goal-Sequence
+                self.goal_sequence = [goal.index for goal in possible_goals]
+                shuffle(self.goal_sequence)
+                
+                # Re-Shuffle the Sequence to Make Sure the Next Goal isn't the Current Goal
+                if len(self.goal_sequence) > 1:
+                    while wells[self.goal_sequence[-1]] == goal[0]:
+                        shuffle(self.goal_sequence)
+            
+            # Return the Selected Goal
+            return goal
+        
         # Check the Arm Selection Mode
         goal = None
-        if self.goals == 1 and self.last_goal > -1:
-            self.goal = [possible_goals[self.last_goal - 1]]
+        update_last_goal = self.goals == 1 and self.end_mode == 1 and self.last_goal != None
+        if update_last_goal and self.first_goal:
+            update_last_goal = False
+            self.first_goal = False
+            if self.last_goal and self.last_goal[-1]:
+                goal = [possible_goals[self.last_goal[-1] - 1]]
+            elif self.goal_selection_mode == 0:
+                goal = selection_mode_0()
+            else:
+                goal = [choice(possible_goals)]
+            self.last_goal.append(0)
         elif self.goal_selection_mode or self.goals != 1:
             # Get the Probability Distribution
             P = self.get_goal_probabilities(possible_goals)
@@ -606,51 +651,39 @@ class FileDrivenMaze(ParameterFile):
                 # Draw From the Distribution (it's ok for this to be the same as the previous goal)
                 goal = list(choice(possible_goals, self.goals, False, P))
         else: # pre-scripted shuffled sequence (not really intended to be used for more than 1 goal)
-            goal = [wells[self.goal_sequence.pop()]]
-            
-            # Generate a New Sequence if Necessary
-            if not self.goal_sequence:
-                # Initialize a New Goal-Sequence
-                self.goal_sequence = [goal.index for goal in possible_goals]
-                shuffle(self.goal_sequence)
-                
-                # Re-Shuffle the Sequence to Make Sure the Next Goal isn't the Current Goal
-                if len(self.goal_sequence) > 1:
-                    while wells[self.goal_sequence[-1]] == goal[0]:
-                        shuffle(self.goal_sequence)
+            goal = selection_mode_0()
         
         # Make Sure the Goal is a List
         if type(goal) != list:
-            if hasattr('__iter__'):
+            if hasattr(goal, '__iter__'):
                 goal = list(goal)
             else:
                 goal = [goal]
         
         # Select Extra LEDs to be Lit
-        if self.goals == 1: # and self.cues not in (0, 1):
-            if self.cues != 0 and abs(self.cues) < len(possible_goals):
-                self.leds.clear()
-                self.leds.extend(goal)
-                if abs(self.cues) > len(self.leds):
-                    leds = [w for w in wells if w not in goal and w != self.home]
-                    if self.previous_goal:
-                        prev = self.previous_goal[0]
-                        if prev in leds: 
-                            leds.remove(prev)
-                        if self.cues > 0:
-                            self.leds.append(prev)
-                    needed = abs(self.cues) - len(self.leds)
-                    if needed > 0:
-                        if needed < len(leds):
-                            self.leds.extend(choice(leds, needed, False))
-                        else:
-                            self.leds.extend(leds)
-            else:
-                self.leds = possible_goals
+        if abs(self.cues) < len(possible_goals):
+            self.leds = goal.copy()
+            if abs(self.cues) > len(self.leds):
+                leds = [w for w in wells if w not in goal and w != self.home]
+                if self.previous_goal:
+                    prev = self.previous_goal[0]
+                    if prev in leds: 
+                        leds.remove(prev)
+                    if self.cues > 0:
+                        self.leds.append(prev)
+                needed = abs(self.cues) - len(self.leds)
+                if needed > 0:
+                    if needed < len(leds):
+                        self.leds.extend(choice(leds, needed, False))
+                    else:
+                        self.leds.extend(leds)
+        else:
+            self.leds = possible_goals.copy()
         
         # Track the Selected Goal
         self.goal = goal
-        if self.goals == 1 and self.last_goal > -1: self.last_goal = self.goal[0].index
+        if update_last_goal: 
+            self.last_goal[-1] = self.goal[0].index
         self.stats.this_goal = 0
         for g in goal: self.goal_counts[g.index - 1] += 1
         self._disp_goal_block_info()

@@ -96,15 +96,15 @@ def parse_outreps(s:str):
     Added to Parser.datatypes with the key 'outreps'
     """
     s = s.replace(' ', '')
-    if s.isdigit():
+    if s.isdigit() or (s[0] == '-' and s[1:].isdigit()):
         return int(s)
     elif s[0] == '(' and s[-1] == ')':
         return tuple(map(int, s[1:-1].split(',')))
     elif s[0] == '[' and s[-1] == ']':
-        return list(map(int, s[1:-1].split(',')))
+        return list(map(int, s[1:-1].split(','))) if len(s) > 2 else []
     else:
         raise ValueError(f"unrecognized outreps: '{s}'")
-Parser.add_datatype('outreps', parse_outreps, r'(\d+|\(\d+,\d+\)|\[\d+(,\d+)*\])')
+Parser.add_datatype('outreps', parse_outreps, r'(\+?\d+|\(\+?\d+,\s*\+?\d+\)|\[\d+(,\s*\d+)*\])')
 
 # A Function to Parse the Various Options for Success Threshold
 def parse_threshold(s:str):
@@ -118,19 +118,46 @@ def parse_threshold(s:str):
     return int(s) if s.isdigit() else float(s)
 Parser.add_datatype('threshold', parse_threshold, Parser.regex_components[float])
 
+# A function to Parse an Integer or a Tuple
+def parse_epoch_end_criteria(s:str):
+    """parse <s> as an integer if possible, or as a 2-tuple 
+    of integers otherwise"""
+    s = s.replace(' ', '')
+    if s.isdigit() or (s[0] == '-' and s[1:].isdigit()):
+        return int(s)
+    elif s[0] == '(' and s[-1] == ')':
+        return tuple(map(int, s[1:-1].split(',')))
+    else:
+        raise ValueError(f"unrecognized epoch end criteria: '{s}'")
+Parser.add_datatype('ep_end', parse_epoch_end_criteria, r'(\+?\d+|\(\+?\d+,\s*\+?\d+\))')
+
+# A function to Parse a Nullable List of Integers
+def parse_nullable_intlist(s:str):
+    """Parse a String as None or as a List of Integers"""
+    if not s or s == 'None':
+        return None
+    elif s[0] == '[' and s[-1] == ']':
+        s = s.replace(' ', '')
+        return list(map(int, s[1:-1].split(','))) if len(s) > 2 else []
+    else:
+        raise ValueError(f"'{s}' cannot be interpreted as a nullable list of integers")
+Parser.add_datatype('nullable_intlist', parse_nullable_intlist, r'(None|\[\d+(,\s*\d+)*\])')
+
 
 # parameter template strings
 parameters = [
     None, # V0 doesn't exist
     "{int} {outreps} {int} {int} {int} {int} {int} {int} {float} {int} {int}",
-    "{int} {outreps} {int} {int} {int} {int} {int} {int} {threshold} {int} {int}"
+    "{int} {outreps} {int} {int} {int} {int} {int} {int} {threshold} {int} {int}",
+    "{int} {outreps} {int} {int} {int} {int} {ep_end} {threshold} {int} {int} {int}"
 ] #  TODO: update this when adding versions
 
 # The Names of the Attributes in the Loaded ParameterFile Object (it's important that these names stay consistent from version to version)
 parameter_attribute_names = [
     None, # V0 doesn't exist
     ["goals", "outreps", "delay", "goal_selection_mode", "cues", "forageassist", "min_trials", "max_trials", "success_threshold", "successful_epochs_remaining", "max_epochs_remaining"],
-    ["goals", "outreps", "delay", "goal_selection_mode", "cues", "forageassist", "min_trials", "max_trials", "success_threshold", "successful_epochs_remaining", "max_epochs_remaining"]
+    ["goals", "outreps", "delay", "goal_selection_mode", "cues", "forageassist", "min_trials", "max_trials", "success_threshold", "successful_epochs_remaining", "max_epochs_remaining"],
+    ["goals", "outreps", "delay", "goal_selection_mode", "cues", "forageassist", "epoch_end_criteria", "success_threshold", "timeout","successful_epochs_remaining", "max_epochs_remaining"]
 ] #  TODO: update this when adding versions
 
 # parameter parsers
@@ -169,17 +196,33 @@ epoch timeout (minutes): {int}
 Training Plan: (numgoals, outreps, locktime, arm selection mode, cues, forageassist, min trials, max trials, success threshold, successful epochs, max epochs)
 {[v2_params, '\n']}"""
 
+v3_pattern = """Version 3
+
+Current State:
+arm visits (rewarded): [{[int, ',']}]
+arm visits (total): [{[int, ',']}]
+arm visits (weighted): [{[float, ',']}]
+goal selections:  [{[int, ',']}]
+goal sequence: [{[int, ',']}]
+arm selection parameters (alpha, beta, gamma, delta): ({float}, {float}, {float}, {float})
+last goal: {nullable_intlist}
+
+Training Plan: (numgoals, outreps, locktime, arm selection mode, cues, forageassist, epoch end criteria, success threshold, timeout successful epochs, max epochs)
+{[v3_params, '\n']}"""
+
 patterns = [
     None, # V0 doesn't exist
     v1_pattern,
-    v2_pattern
+    v2_pattern,
+    v3_pattern
 ] #  TODO: update this when adding versions
 
 # The Names of the Attributes in the Loaded ParameterFile Object (it's important that these names stay consistent from version to version)
 attribute_names = [
     None, # V0 doesn't exist
     ["rewarded_visits", "total_visits", "goal_counts", "goal_sequence", "training_plan"],
-    ["rewarded_visits", "total_visits", "weighted_visits", "goal_counts", "goal_sequence", "alpha", "beta", "gamma", "timeout", "training_plan"]
+    ["rewarded_visits", "total_visits", "weighted_visits", "goal_counts", "goal_sequence", "alpha", "beta", "gamma", "timeout", "training_plan"],
+    ["rewarded_visits", "total_visits", "weighted_visits", "goal_counts", "goal_sequence", "alpha", "beta", "gamma", "delta", "last_goal", "training_plan"]
 ] #  TODO: update this when adding versions
 
 # Make the File Parsers
@@ -214,7 +257,15 @@ class ParameterFile:
         self.version = version if version >= 0 else len(attribute_names) + version
         self.filepath = filepath
         
+        # Special Indices
+        self.outreps_index = 1 #  TODO: update this when adding versions (if necessary)
+        self.epoch_end_criteria_index = 6 if self.version == 3 else None #  TODO: update this when adding versions (if necessary)
+        
         # Load the File
+        self.min_trials = -1
+        self.max_trials = -1
+        self.goal_blocks = -1
+        self.end_mode = 0
         if self.filepath:
             self.load_from_file()
         else:
@@ -262,6 +313,17 @@ class ParameterFile:
         # Get the Training Plan Values
         for name, val in zip(parameter_attribute_names[self.version], self.training_plan[self.training_plan_index]):
             self.__dict__[name] = val
+        
+        # Get the Epoch End Criteria
+        if self.version == 3:
+            if type(self.epoch_end_criteria) == int:
+                self.goal_blocks = self.epoch_end_criteria
+                self.end_mode = 1
+            elif type(self.epoch_end_criteria) == tuple and len(self.epoch_end_criteria) == 2:
+                self.min_trial, self.max_trials = self.epoch_end_criteria
+                self.end_mode = 0
+            else:
+                raise ValueError(f"Unrecognized Epoch End Criteria: '{self.epoch_end_criteria}'")
     
     def get_parameter_file_lines(self) -> list[str]:
         """Get the Updated Lines of the Parameter File (mostly used when saving the file)"""
@@ -269,21 +331,18 @@ class ParameterFile:
         self.training_plan[self.training_plan_index][-2] = self.successful_epochs_remaining
         self.training_plan[self.training_plan_index][-1] = self.max_epochs_remaining
         
-        # Update the Weighted Visits (if applicable)
-        weighted_visits_original = None
-        if hasattr(self, 'weighted_visits') and hasattr(self, '_get_weighted_visits'):
-            weighted_visits_original = self.weighted_visits.copy()
-            self.weighted_visits = self._get_weighted_visits()
-        
         # Get the Header Values
         values = [self.__dict__[name] for name in attribute_names[self.version]]
         
-        # Fix the Weighted Visits
-        if weighted_visits_original:
-            self.weighted_visits = weighted_visits_original
+        # Edit the Outreps/Epoch End Criteria
+        for row in values[-1]:
+            for index in [self.outreps_index, self.epoch_end_criteria_index]:
+                if index != None:
+                    row[index] = str(row[index]).replace(' ', '')
         
-        # Build/ Return the Lines
+        # Build/Return the Lines
         return parsers[self.version].build(values).split('\n')
+        
     
     def save_to_file(self):
         """Update the Values in the Parameter File with the Values Currently in the ParameterFile Object"""
@@ -291,16 +350,18 @@ class ParameterFile:
     
     def get_param_string(self):
         """Generate a String Containing the Parameters from the Selected Training Plan Line"""
+        end_criteria = str(self.epoch_end_criteria).replace('(', '[').replace(')', ']') if self.version == 3 else ''
         return [
             f"params: [goals: {self.goals}, outreps: {self.outreps}, delay: {self.delay}, cued: {self.cues}, forageassist: {self.forageassist}, trials: [{self.min_trials}, {self.max_trials}], timeout: {self.timeout}, success_threshold: {self.success_threshold}, epochs_remaining: [{self.successful_epochs_remaining}, {self.max_epochs_remaining}]]",
             f"params: [goals: {self.goals}, outreps: {self.outreps}, delay: {self.delay}, cued: {self.cues}, trials: [{self.min_trials}, {self.max_trials}], success_threshold: {self.success_threshold}, epochs_remaining: [{self.successful_epochs_remaining}, {self.max_epochs_remaining}]]",
-            f"params: [goals: {self.goals}, outreps: {self.outreps}, delay: {self.delay}, arm selection mode: {self.goal_selection_mode}, cues: {self.cues}, forageassist: {self.forageassist}, trials: [{self.min_trials}, {self.max_trials}], success_threshold: {self.success_threshold}, epochs_remaining: [{self.successful_epochs_remaining}, {self.max_epochs_remaining}], timeout: {self.timeout}]"
+            f"params: [goals: {self.goals}, outreps: {self.outreps}, delay: {self.delay}, arm selection mode: {self.goal_selection_mode}, cues: {self.cues}, forageassist: {self.forageassist}, trials: [{self.min_trials}, {self.max_trials}], success_threshold: {self.success_threshold}, epochs_remaining: [{self.successful_epochs_remaining}, {self.max_epochs_remaining}], timeout: {self.timeout}]",
+            f"params: [goals: {self.goals}, outreps: {self.outreps}, delay: {self.delay}, arm selection mode: {self.goal_selection_mode}, cues: {self.cues}, forageassist: {self.forageassist}, end criteria: {end_criteria}, success_threshold: {self.success_threshold}, epochs_remaining: [{self.successful_epochs_remaining}, {self.max_epochs_remaining}], timeout: {self.timeout}]"
         ][self.version] #  TODO: update this when adding versions
     
     def print_params(self):
         """Print a Selection of Important Parameters from the Parameter File"""
         # Print the Maze Parameters
-        if self.version == 1: #  TODO: update this when adding versions
+        if self.version == 1: #  TODO: update this when adding versions (as needed)
             for line in [
                 f"rewarded visits: {list(self.rewarded_visits)}",
                 f"total visits:         {list(self.total_visits)}",
@@ -324,3 +385,6 @@ class ParameterFile:
             return (self.alpha, self.beta, self.gamma)
         else:
             return (self.alpha, self.beta, self.gamma, self.delta)
+
+class Sentinel:
+    """An Empty Class to be Used as a Sentinal in Certain Applications"""
