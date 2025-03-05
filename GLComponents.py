@@ -511,7 +511,7 @@ class FileDrivenMaze(ParameterFile):
         self.gamma_prime = self.gamma ** (1 / trials)
         
         # Check for Bad Parameter Combos
-        if max(self.goals, self.forageassist) > abs(self.cues):
+        if self.cues and max(self.goals, self.forageassist) > abs(self.cues):
             goal_str = "goals" if self.goals >= self.forageassits else "forageassisted goals"
             goals = max(self.goals, self.forageassist)
             raise ValueError(f"Number of Cues ({abs(self.cues)}) must be greater than the number of {goal_str} ({goals})")
@@ -661,7 +661,7 @@ class FileDrivenMaze(ParameterFile):
                 goal = [goal]
         
         # Select Extra LEDs to be Lit
-        if abs(self.cues) < len(possible_goals):
+        if self.cues and abs(self.cues) < len(possible_goals):
             self.leds = goal.copy()
             if abs(self.cues) > len(self.leds):
                 leds = [w for w in wells if w not in goal and w != self.home]
@@ -677,8 +677,10 @@ class FileDrivenMaze(ParameterFile):
                         self.leds.extend(choice(leds, needed, False))
                     else:
                         self.leds.extend(leds)
-        else:
+        elif self.cues:
             self.leds = possible_goals.copy()
+        else:
+            self.leds = []
         
         # Track the Selected Goal
         self.goal = goal

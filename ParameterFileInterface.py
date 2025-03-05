@@ -320,7 +320,7 @@ class ParameterFile:
                 self.goal_blocks = self.epoch_end_criteria
                 self.end_mode = 1
             elif type(self.epoch_end_criteria) == tuple and len(self.epoch_end_criteria) == 2:
-                self.min_trial, self.max_trials = self.epoch_end_criteria
+                self.min_trials, self.max_trials = self.epoch_end_criteria
                 self.end_mode = 0
             else:
                 raise ValueError(f"Unrecognized Epoch End Criteria: '{self.epoch_end_criteria}'")
