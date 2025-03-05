@@ -161,7 +161,7 @@ class _wells(list):
         else:
             return well_list
     
-    def activate(self, well_list:list = None, set_leds:bool = True, update:bool = False):
+    def activate(self, well_list:list = None, set_leds:bool = False, update:bool = False):
         """Activate All Wells in the Given List/Group"""
         # Activate the Wells
         for well in self._get_well_list(well_list):
