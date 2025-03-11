@@ -11,6 +11,7 @@ import numpy as np
 from numpy.random import choice, shuffle
 from random import randint #  not taken from numpy so that it includes both endpoints
 from collections import defaultdict
+from dataclasses import dataclass, field
 try:
     from Modules import StateScriptInterface as ssi
     from Modules.ParameterFileInterface import ParameterFile
@@ -482,6 +483,209 @@ def well_callback(line:str) -> int:
 """
 Platforms for Building Mazes
 """
+
+class State(str):
+    """Class for Defining StateMachine States"""
+
+@dataclass(frozen = True)
+class Transition:
+    """Class for Defining StateMachine Transitions"""
+    source_state: State
+    target_state: State
+    opcode: str
+    condition: callable = field(default_factory = lambda : Transition.no_condition)
+    action: callable = field(default_factory = lambda : Transition.null_action)
+    
+    def __hash__(self):
+        return hash(self.target_state)
+    
+    def no_condition(*args, **kwargs):
+        return True
+    
+    def null_action(*args, **kwargs):
+        pass
+
+class StateMachine:
+    def __init__(self, start:State = 'start', end:State = 'end', timeout:int = 0):
+        """
+        Initialize a Finite State Machine
+
+        Parameters
+        ----------
+        start : str or State, optional
+            The starting state for the machine. 
+            The default is 'start'.
+        end : str or State, optional
+            The ending state for the machine. 
+            The default is 'end'.
+        timeout : int, optional
+            The number of minutes the machine 
+            will run before timing out. 
+            The default is 0 (no timeout).
+
+        """
+        
+        self.states = {}
+        self.transitions = {}
+        self.start = start
+        self.end = end
+        self.state = self.start
+        self.t0 = time.time()
+        self.timeout = 60 * timeout
+        self._timed_out = None
+    
+    def __setattr__(self, name:str, value:any):
+        if name in ('start', 'end'):
+            # make sure State objects are treated as such
+            self.__dict__[name] = self._add_state(value)
+        elif name == 'state':
+            # Assert that the State is a Recognized State Object
+            if value in self.transitions:
+                # casting to make sure it's a State object and not a string
+                self.__dict__[name] = self._add_state(value)
+            else:
+                raise ValueError(f'Unrecognized State: {value}')
+        else:
+            # otherwise just set the attribute
+            self.__dict__[name] = value
+    
+    def __repr__(self):
+        states = ', '.join(self.states.keys())
+        return f"StateMachine[{states}]"
+    
+    def __getitem__(self, state:str):
+        return self.transitions[str(state)]
+    
+    def __setitem__(self, state:str, transitions:list):
+        self.transitions[str(state)] = transitions
+    
+    def __contains__(self, state:str):
+        return str(state) in self.transitions
+    
+    def __bool__(self):
+        return True
+    
+    def keys(self):
+        return self.transitions.keys()
+    
+    def values(self):
+        return self.transitions.values()
+    
+    def items(self):
+        return self.transitions.items()
+    
+    def _add_state(self, state:str):
+        state = state if isinstance(state, State) else State(state)
+        if state not in self:
+            self[state] = []
+            self.states[state] = state
+        return self.states[state]
+    
+    def add_transition(self, source_state:State, target_state:State, opcode:str, condition:callable = None, action:callable = None) -> None:
+        source_state = self._add_state(source_state)
+        target_state = self._add_state(target_state)
+        args = [source_state, target_state, opcode]
+        if condition != None: args.append(condition)
+        if action != None: args.append(action)
+        self[source_state].append(Transition(*args))
+    
+    def __iadd__(self, transition:Transition):
+        self._add_state(transition.source_state)
+        self._add_state(transition.target_state)
+        self[transition.source_state].append(transition)
+        return self
+    
+    def running(self) -> bool:
+        """Returns if the State Machine is Still Running"""
+        return self.state != self.end
+    
+    def timed_out(self) -> bool:
+        """Returns if the Machine has or did Time Out"""
+        return (time.time() - self.t0) > self.timeout if self._timed_out == None else self._timed_out
+    
+    def change_state(self, new_state:State) -> bool:
+        """
+        WARNING: Does NOT check if a valid transition exists
+        
+        This method mainly exists so that classes which inherit 
+        from this class can override the change_state
+        
+        Note that this method checks for timeout, and disallows state 
+        changes if the machine is in the end state
+        
+        Returns if the Machine is Running (for convenience)
+        """
+        if self.state == self.end:
+            return False
+        elif self.timeout and (time.time() - self.t0) > self.timeout:
+            self.state = self.end
+            self._timed_out = True
+            return False
+        else:
+            self.state = new_state
+            if new_state == self.end:
+                self._timed_out = False
+                return False
+            else:
+                return True
+    
+    def update(self, opcode:str, *args, **kwargs) -> bool:
+        """Updates the State of the State Machine, Returning if the State Changed"""
+        if self.running():
+            for transition in self[self.state]:
+                if opcode == transition.opcode and transition.condition(*args, **kwargs):
+                    transition.action()
+                    self.change_state(transition.target_state)
+                    return True
+        return False
+    
+    def stop(self):
+        """Stop the State Machine"""
+        self.state = self.end
+
+"""
+class RewardWellMaze(StateMachine):
+    def __init__(self, start = 'start', timeout:int = 70, auto_ready:bool = True):
+        super(RewardWellMaze, self).__init__(start, timeout = timeout)
+        self.last_poke = None
+        
+        # Configure the Command Handlers
+        ssi.config.rewarded_command = 'UP'
+        ssi.config.add_commands({
+            'READY': self.update,
+            'UP' : self.update,
+            'DOWN' : self.down,
+            'LOCKEND' : self.update,
+            'PING' : self.check_timeout
+        })
+        
+        # Call the Ready Function
+        if auto_ready: self.update('READY')
+    
+    def ready(self, t:int):
+        pass
+    
+    def down(self, t:int, well:Well):
+        wells.update()
+    
+    def close(self, t:int):
+        if self.running():
+            self.change_state(self.end)
+    
+    def check_timeout(self, t:int, *args, **kwargs):
+        if self.timed_out(): self.close()
+    
+    def check_success_rate(self):
+        pass
+    
+    def callback(self, line:str):
+        if self.running() and well_callback(line):
+            self.check_success_rate()
+        elif not self.running() and ssi.command_is_valid(line):
+            ssi.print_stats()
+            self.check_success_rate()
+        
+#"""
 
 class FileDrivenMaze(ParameterFile):
     def __init__(self, filepath:str):
