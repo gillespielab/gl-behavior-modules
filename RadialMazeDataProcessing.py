@@ -36,6 +36,40 @@ def get_timestamp(format_str = "%Y%m%d_%H%M%S") -> str:
     """
     return time.strftime(format_str.replace("%f", str(int(round(time.time()%1 * 10**6)))))
 
+# Class for Making Discrete Color Gradients
+class Colors:
+    rainbow = [
+        np.array([236,  97, 115]),
+        np.array([241, 174,  74]),
+        np.array([225, 221, 110]),
+        np.array([ 81, 163,  80]),
+        np.array([105, 100, 255]),
+        np.array([189,  99, 190])
+    ]
+    
+    def gradient(n:int, colors:list[np.ndarray] = rainbow, use_hex:bool = True) -> list:
+        """Make an n-Color Linear Gradient Using the Color List Provided"""
+        def linear_interp(x, x1, x2, y1, y2):
+            f = (x - x1) / (x2 - x1)
+            return f * y1 + (1 - f) * y2
+        
+        def to_hex(color:np.ndarray) -> str:
+            return '#' + ''.join(hex(int(round(c)))[2:] for c in color)
+        
+        X = np.linspace(0, len(colors) - 1, n)
+        i = 0
+        grad = []
+        for x in X:
+            while x > i + 1:
+                i += 1
+            grad.append(linear_interp(x, i, i + 1, colors[i + 1], colors[i]))
+        
+        if use_hex:
+            grad = [to_hex(color) for color in grad]
+        
+        return grad
+
+
 # An Object for Storing Raw Log File Lines
 class Line:
     # Main Parser
