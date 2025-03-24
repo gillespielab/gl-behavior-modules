@@ -8,8 +8,12 @@ Created on Fri Jan 31 14:25:33 2025
 # Import Libraries
 import numpy as np
 import matplotlib.pyplot as plt
-from Modules.Utils import search, readlines
-from Modules.ParameterFileInterface import ParameterFile, Parser
+try:
+    from Modules.Utils import search, readlines
+    from Modules.ParameterFileInterface import ParameterFile, Parser
+except:
+    from Utils import search, readlines
+    from ParameterFileInterface import ParameterFile, Parser
 import platform
 import time
 import re
@@ -47,14 +51,14 @@ class Colors:
         np.array([189,  99, 190])
     ]
     
+    def to_hex(color:np.ndarray) -> str:
+        return '#' + ''.join(hex(int(round(c)))[2:] for c in color)
+    
     def gradient(n:int, colors:list[np.ndarray] = rainbow, use_hex:bool = True) -> list:
         """Make an n-Color Linear Gradient Using the Color List Provided"""
         def linear_interp(x, x1, x2, y1, y2):
             f = (x - x1) / (x2 - x1)
             return f * y1 + (1 - f) * y2
-        
-        def to_hex(color:np.ndarray) -> str:
-            return '#' + ''.join(hex(int(round(c)))[2:] for c in color)
         
         X = np.linspace(0, len(colors) - 1, n)
         i = 0
@@ -65,7 +69,7 @@ class Colors:
             grad.append(linear_interp(x, i, i + 1, colors[i + 1], colors[i]))
         
         if use_hex:
-            grad = [to_hex(color) for color in grad]
+            grad = [Colors.to_hex(color) for color in grad]
         
         return grad
 
