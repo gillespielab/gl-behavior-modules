@@ -10,9 +10,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 try:
     from Modules.Utils import search, readlines
-    from Modules.ParameterFileInterface import ParameterFile, Parser
 except:
     from Utils import search, readlines
+try:
+    from Modules.ParameterFileInterface import ParameterFile, Parser
+except:
     from ParameterFileInterface import ParameterFile, Parser
 import platform
 import time
@@ -54,7 +56,7 @@ class Colors:
     def to_hex(color:np.ndarray) -> str:
         return '#' + ''.join(hex(int(round(c)))[2:] for c in color)
     
-    def gradient(n:int, colors:list[np.ndarray] = rainbow, use_hex:bool = True) -> list:
+    def gradient(n:int, colors:list = rainbow, use_hex:bool = True) -> list:
         """Make an n-Color Linear Gradient Using the Color List Provided"""
         def linear_interp(x, x1, x2, y1, y2):
             f = (x - x1) / (x2 - x1)
@@ -524,7 +526,7 @@ class Block:
         
         self.compute_stats()
     
-    def compute_stats(self) -> (int, int, int, int):
+    def compute_stats(self) -> tuple:
         """Computes/Returns the Count Stats: (home, goal, other, lock)"""
         self.stats.home = len(self.all_trials)
         self.stats.goal = sum(t.rewarded for t in self)
@@ -562,7 +564,7 @@ class Block:
         # Return the Next Index in the File
         return i + 1
     
-    def get_phases(self, included:int, is_good_repetition = None, is_memory_lapse = None) -> list[tuple[int, list[Trial]]]:
+    def get_phases(self, included:int, is_good_repetition = None, is_memory_lapse = None) -> list:
         
         # Get the Methods for Determining "Good Repetition" and "Memory Lapse"
         if not hasattr(is_good_repetition, '__call__'):
@@ -693,7 +695,7 @@ class _nwb_filename_parser:
         self.underscore = bool(underscore)
         self.regex = r'^.*?\d+' + '_'*self.underscore + '\.nwb'
     
-    def parse(self, filename:str, safe:bool = False) -> (str, int):
+    def parse(self, filename:str, safe:bool = False) -> tuple:
         # Check Safe Mode
         if safe and not self.match(filename):
             # Return that the Filename Doesn't Match
@@ -719,7 +721,7 @@ class _nwb_filename_parser:
     def match(self, filename:str):
         return self.regex.match(filename)
     
-    def __call__(self, filename:str, safe:bool = False) -> (str, int):
+    def __call__(self, filename:str, safe:bool = False) -> tuple:
         """Parse the Filename (see .parse for Full Documentation)
         
         Uses the regex to match the input string if safe == True
@@ -1269,7 +1271,7 @@ class Cohort:
         else:
             raise KeyError(f"Unrecognized Key: '{key}'")
     
-    def fetch_blocks(self, key:str, included:int = 3, complete:bool = True, filter_function = None) -> dict[str, list[Block]]:
+    def fetch_blocks(self, key:str, included:int = 3, complete:bool = True, filter_function = None) -> dict:
         """
         Get the Specified Epochs
 
@@ -1472,7 +1474,7 @@ class Study:
         else:
             raise KeyError(f"Unrecognized Key: '{key}'")
     
-    def fetch_blocks(self, key:str, included:int = 3, complete:bool = True, filter_function = None) -> dict[str, list[Block]]:
+    def fetch_blocks(self, key:str, included:int = 3, complete:bool = True, filter_function = None) -> dict:
         """
         Get the Specified Epochs
 
@@ -1609,7 +1611,7 @@ def is_param_vector_list(s:list) -> bool:
 def is_binary_string(s:str) -> bool:
     return type(s) == str and all(c in '01' for c in s)
 
-def get_blocks(epochs:list[Epoch], include_first:bool = True, include_others:bool = True, include_incomplete:bool = False, flatten:bool = True, filter_function = None) -> list:
+def get_blocks(epochs:list, include_first:bool = True, include_others:bool = True, include_incomplete:bool = False, flatten:bool = True, filter_function = None) -> list:
     """
     Extract a List of Blocks from the List of Epochs Using the Specified Filters
 

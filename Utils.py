@@ -26,7 +26,7 @@ def readfile(filepath:str) -> str:
     return filestring
 
 # Read a File by Lines
-def readlines(filepath:str, remove_trailing_newlines:bool = True) -> list[str]:
+def readlines(filepath:str, remove_trailing_newlines:bool = True) -> list:
     """Read a File Line by Line"""
     lines = None
     with open(filepath, 'r') as file:
@@ -129,7 +129,7 @@ def Round(x:float, ux:float, string:bool = True, fmt:int = 0):
     else:
         return x, ux
 
-def weighted_average(X:list, UX:list = None) -> (float, float):
+def weighted_average(X:list, UX:list = None) -> tuple:
     """compute the weighted average of measurements (X) given their uncertainties (UX)"""
     if UX == None:
         UX = [x[1] for x in X]
@@ -160,7 +160,7 @@ def smooth(x:list, width:int, symmetric:bool = True, kernel = None):
         window_sum -= window.popleft()
     return smoothed
 
-def binary_mean(k:int, n:int = None) -> (float, float):
+def binary_mean(k:int, n:int = None) -> tuple:
     """k = sum(success), n = total_trials -> mean, uncertainty on the mean
     
     alternatively, you can pass k as the raw data (e.g. k = [0,1,1,0,0,1,0,1,...]) 

@@ -325,7 +325,7 @@ class ParameterFile:
             else:
                 raise ValueError(f"Unrecognized Epoch End Criteria: '{self.epoch_end_criteria}'")
     
-    def get_parameter_file_lines(self) -> list[str]:
+    def get_parameter_file_lines(self) -> list:
         """Get the Updated Lines of the Parameter File (mostly used when saving the file)"""
         # Update Values Known to Change
         self.training_plan[self.training_plan_index][-2] = self.successful_epochs_remaining
