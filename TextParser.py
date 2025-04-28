@@ -116,6 +116,13 @@ class Parser:
             (used when building strings). Note that Parsers which are added as 
             custom datatypes will recursively call Parser.build to create strings.
             Default is None (str).
+        regex : str (optional)
+            An override for the regex which would otherwise be created by default. 
+            It is strongly recommended to not use both a regex override and the 
+            split_parse() method, unless you know what you are doing (split_parse 
+            relies heavily on capture groups to know what data it needs to pay 
+            attention to and cast).
+            Default is None (str).
         
         Notes
         -----
@@ -155,7 +162,7 @@ class Parser:
         # Add the to_string Method
         if to_string != None: Parser.to_string_methods[casting_function] = to_string
     
-    def __init__(self, pattern:str, return_type = tuple, return_single:bool = True, ids:dict = None):
+    def __init__(self, pattern:str, return_type = tuple, return_single:bool = True, ids:dict = None, regex:str = None):
         """Parse a Line Based on a Format String
 
         Parameters
@@ -386,7 +393,7 @@ class Parser:
             raise ValueError("data elements must be separated by fixed text (i.e. you cannot have 'back-to-back' data elements)")
         
         # Finish and Compile the Regex
-        self.regex = re.compile(self.regex + '$')
+        self.regex = re.compile(self.regex + '$' if regex == None else regex)
     
     def __hash__(self):
         # parsers initialized with the same pattern will have the same hash, and will evaluate to equal, but will have different IDs

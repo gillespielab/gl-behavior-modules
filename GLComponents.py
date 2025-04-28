@@ -9,8 +9,9 @@ Created on Wed Jan 15 12:34:28 2025
 import time
 import numpy as np
 from numpy.random import choice, shuffle
+import matplotlib.pyplot as plt
 from random import randint #  not taken from numpy so that it includes both endpoints
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 try:
     from Modules import StateScriptInterface as ssi
@@ -897,6 +898,251 @@ class FileDrivenMaze(ParameterFile):
         # Return the Selection
         return goal
     
+
+"""
+Live Plot Data
+"""
+
+class Poke:
+    def __init__(self, well:int, rewarded:bool, t_up:int, t_down:int = None):
+        self.well = well
+        self.rewarded = rewarded
+        self.up = t_up
+        self.down = t_down
+    
+    def __repr__(self) -> str:
+        return f"Poke[{self.well} {int(self.rewarded)}]"
+
+class Trial:
+    def __init__(self, number:int, state:tuple = None, events:list = ()):
+        self.number = number
+        self.state = state
+        self.events = list(events)
+        self.start = None
+        self.end = None
+        self.set_times()
+    
+    def __repr__(self) -> str:
+        return f"Trial({self.number}){self.events}"
+    
+    def set_times(self) -> None:
+        """Compute/Record the Start/End Times of the Trial (typically not necessary to call by hand)"""
+        if self.events:
+            self.start = self.events[0].up
+            self.end = self.events[-1].down
+            if self.end == None:
+                self.end = self.events[-1].up
+    
+    def up(self, well:int, rewarded:bool, t:int) -> Poke:
+        """Add a New Poke to the Trial"""
+        self.events.append(Poke(well, rewarded, t))
+        self.end = t
+        return self.events[-1]
+    
+    def down(self, t:int) -> Poke:
+        """Update the Down Time for the Most Recent Poke"""
+        if self.events:
+            self.events[-1].down = t
+            self.end = t
+            return self.events[-1]
+
+class Block:
+    def __init__(self, state:tuple = None, start:int = None, end:int = None, trials:list = ()):
+        self.state = state
+        self.trials = list(trials)
+    
+    def new_trial(self, state:tuple = None, pokes:list = ()) -> Trial:
+        """Add a New Trial to the Block"""
+        trial = Trial(len(self.trials) + 1, state, pokes)
+        self.trials.append(trial)
+        return trial
+    
+    def up(self, well:int, rewarded:bool, t:int) -> Poke:
+        """Create a New Poke"""
+        self.end = t
+        if self.trials:
+            return self.trials[-1].up(well, rewarded, t)
+    
+    def down(self, t:int) -> Poke:
+        """Update the Down Time for the Most Recent Poke"""
+        self.end = t
+        if self.trials: 
+            return self.trials[-1].down(t)
+
+class Plotter:
+    def __init__(self, expected_trials:int, title:str, filepath:str = None, to_table_data = None, first_line:str = None, state:tuple = (), plot:bool = True):
+        self.blocks = []
+        self.trials = [Trial(0, state)]
+        self.first_trial = True
+        
+        self.complete = False
+        self.plot = bool(plot)
+        self.active = True
+        
+        self.filepath = filepath
+        self.to_table_data = to_table_data
+        self.logging = filepath != None and hasattr(to_table_data, '__call__')
+        self._open_log(first_line)
+        self.trials_logged = 0
+        
+        self.unplotted_pokes = deque()
+        
+        self.title = title
+        self.x = 1
+        self.X = expected_trials
+        self.fig = None
+        self.ax = None
+        self.init_plot()
+    
+    def _open_log(self, first_line:str) -> None:
+        if self.logging:
+            with open(self.filepath, 'w') as f:
+                f.write(first_line)
+                f.write('\n')
+                f.close()
+    
+    def _log(self, trial) -> None:
+        if self.logging and self.active:
+            with open(self.filepath, 'a') as f:
+                f.write(self.to_table_data(trial))
+                f.write('\n')
+                f.close()
+            self.trials_logged += 1
+    
+    def _close_log(self):
+        if self.logging and self.active:
+            while self.trials_logged < len(self.trials):
+                self._log(self.trials[self.trials_logged])
+            self.logging = False
+    
+    def _try_plot(self, method, *args):
+        """a wrapper to make sure plotting never breaks anything"""
+        try:
+            if self.plot and self.active:
+                method(*args)
+        except:
+            print('warning: unable to initialize the live plot; live plot disabled')
+            self.plot = False
+    
+    def _init_plot(self):
+        
+        def on_close(event):
+            self.plot = False
+        
+        plt.ion()
+        self.fig, self.ax = plt.subplots()
+        self.fig.canvas.mpl_connect('close_event', on_close)
+        plt.suptitle(self.title + ": Running")
+        plt.ylabel('Well Number')
+        plt.xlabel('Trials + Lockouts')
+        self._set_axis_params()
+        plt.show()
+    
+    def _set_axis_params(self):
+        plt.ylim(0.8, 6.2)
+        self.fig.set_figheight(5)
+        self._set_xaxis_lims()
+        plt.ylabel('Arm Number')
+        plt.xlabel('Trials + Lockouts')
+    
+    def _set_xaxis_lims(self):
+        try:
+            if self.plot and self.active:
+                plt.xlim(0, self.X)
+                self.fig.set_figwidth(self.X / 6)
+        except:
+            pass
+    
+    def _update_plot_full(self):
+        self.ax.cla()
+        self._set_axis_params()
+        self.x = self.raster_plot(axes = self.ax, included = 1, black_line = False)
+        if self.x > self.X:
+            self.X = self.x
+            self._set_axis_params()
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+    
+    def _update_plot(self):
+        while self.unplotted_pokes:
+            well, rewarded, lockout = self.unplotted_pokes.popleft()
+            marker = '.' if rewarded else '+'
+            color = 'grey' if lockout else 'magenta'
+            plt.errorbar(self.x, well, fmt = marker, color = color)
+            self.x += 1
+        #self.fig.canvas.draw()
+        #self.fig.canvas.flush_events()
+    
+    def _add_block_divider(self):
+        self.update_plot() # this is necessary to make sure self.x is accurate
+        if self.maze.outreps != 1 and self.x > 1:
+            self.ax.plot([self.x - 0.5]*2, [0, 8], color = 'lightgrey')
+    
+    def init_plot(self):
+        self._try_plot(self._init_plot)
+    
+    def add_block_divider(self):
+        self._try_plot(self._add_block_divider)
+    
+    def update_plot(self):
+        self._try_plot(self._update_plot)
+    
+    def new_block(self, t:int, state:tuple = ()) -> None:
+        # Clean Up the Current Block
+        if self.blocks:
+            self.add_block_divider()
+        
+        # Add a New Block
+        self.blocks.append(Block(state, t))
+    
+    def new_trial(self, t:int, state:tuple = ()) -> None:
+        # delete the 0th trial
+        if self.first_trial and not self.trials[0].events:
+            self.trials.pop(0)
+        self.first_trial = False
+        
+        # log the last trial
+        if self.trials:
+            self._log(self.trials[-1])
+        
+        # make sure there's a block to add trials to
+        if not self.blocks: self.new_block(state)
+        
+        # create/add the trial
+        self.trials.append(self.blocks[-1].new_trial(state))
+    
+    def add_event(self, event:any) -> None:
+        """Add an arbitrary event to the current trial (plots nothing)"""
+        self.trials[-1].events.append(event)
+    
+    def up(self, well:int, rewarded:bool, t:int, show:bool = True, lockout:bool = False, state:tuple = ()) -> None:
+        # record the poke
+        if self.blocks:
+            self.blocks[-1].up(well, rewarded, t)
+        else:
+            self.trials[-1].up(well, rewarded, t)
+        
+        # plot the poke
+        if show:
+            # Check for a Lockout
+            if lockout:
+                # Update the Plot Limit
+                self.X += 1
+                self._set_xaxis_lims()
+            
+            # Add the Poke ot the Plot
+            self.unplotted_pokes.append((well, rewarded, lockout))
+            self.update_plot()
+    
+    def down(self, t):
+        if self.blocks: self.blocks[-1].down(t)
+        
+    def close(self):
+        self._close_log()
+        self.update_plot()
+        if self.plot and self.active:
+            plt.suptitle(self.title + ": Complete")
+        self.active = False
 
 """
 Other Functions
