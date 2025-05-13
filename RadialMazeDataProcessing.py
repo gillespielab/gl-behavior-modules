@@ -9,9 +9,9 @@ Created on Fri Jan 31 14:25:33 2025
 import numpy as np
 import matplotlib.pyplot as plt
 try:
-    from Modules.Utils import search, readlines
+    from Modules.Utils import search, readlines, smooth
 except:
-    from Utils import search, readlines
+    from Utils import search, readlines, smooth
 try:
     from Modules.ParameterFileInterface import ParameterFile, Parser
 except:
@@ -200,6 +200,11 @@ class Poke:
         # Return the Next Position
         return x + 1
 
+class Errors:
+    search = 1
+    repeat = 2
+    perseverative = 4
+
 class Trial:
     
     current = None
@@ -221,12 +226,17 @@ class Trial:
         self.search_mode = 0
         
         self.goal = self.block.goal if self.block else None
-        
+        self.leds = self.block.leds if self.block else None
+
         self.start = home_poke.start if home_poke else None
         self.end = None
         self.complete = False
         self.rewarded = False
         
+        # processed data attirbutes
+        self.good_decision = None
+        self.error = 0
+
         self.lines = []
         
         # Update the Trial Pointers
@@ -269,7 +279,7 @@ class Trial:
         if not self.goal and self.block: self.goal = self.block.goal
         
         # Switch the Associated Goal Block
-        if not self.block.first_trial_adjusted and self.index == 0 and Block.previous and self.outer.well in Block.previous.goal:
+        if not self.block.first_trial_adjusted and self.index == 0 and Block.previous and Block.previous.goal != None and self.outer.well in Block.previous.goal:
             self.block.first_trial_adjusted = True
             self.index = len(Block.previous.trials)
             self.search_mode = 0
@@ -308,6 +318,25 @@ class Trial:
             [(poke.well, poke.start, poke.end) for poke in self.lockouts]
         ]
     
+    def to_table_entry_new(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
+        """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, lit_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
+        include_index |= index != None
+        return [self.index if index == None else index]*bool(include_index) + [
+            self.trial_num if trial_num == None else trial_num, 
+            self.start, 
+            self.end, 
+            int(self.rewarded), 
+            int(self.search_mode), 
+            self.outer.well if self.outer else None, 
+            self.goal, 
+            self.leds,
+            self.reps_remaining, 
+            self.home.end if self.home else None, 
+            self.outer.start if self.outer else None, 
+            self.outer.end if self.outer else None, 
+            [(poke.well, poke.start, poke.end) for poke in self.lockouts]
+        ]
+
     def from_table_entry(block, entry:list):
         """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
         # Poke(well, rewarded, search_mode, maze_phase, goal, start_time, end_time, trial)
@@ -341,7 +370,9 @@ class Trial:
         
         # Update the Rewarded Flag
         self.rewarded = bool(self.outer and self.outer.rewarded)
-        
+        if self.rewarded: 
+            self.good_decision = True
+
         # Update the End Time
         if self.lockouts:
             self.end = self.lockouts[-1].end
@@ -352,6 +383,7 @@ class Trial:
         
         # Update the Goal
         if not self.goal and self.block: self.goal = self.block.goal
+        if not self.leds and self.block: self.leds = self.block.leds
         
         # Update the Search Mode
         if self.home:
@@ -468,6 +500,7 @@ class Block:
         self.epoch = Epoch.current if epoch == None else epoch
         
         self.goal = None
+        self.leds = None
         self.prev_goal = None
         self.outreps = None
         
@@ -511,7 +544,7 @@ class Block:
     def _on_load(self, complete:bool = None):
         """Code to Run After Loading the Data"""
         reps_remaining = True
-        if complete == None and self.outreps:
+        if complete == None and self.outreps != None:
             reps_remaining = self.outreps
             for t in self.trials:
                 t.reps_remaining = reps_remaining
@@ -521,9 +554,11 @@ class Block:
             if complete == None:
                 self._on_load() # self.outreps evals to True in the recursion since reps_remaining > 0
                 return
-        
+        elif self.trials and self.outreps == None:
+            self.outreps = self.trials[0].reps_remaining
+
         self.complete = (not reps_remaining) if complete == None else complete
-        
+
         self.compute_stats()
     
     def compute_stats(self) -> tuple:
@@ -534,6 +569,29 @@ class Block:
         self.stats.lock = sum(len(t.lockouts) for t in self)
         return (self.stats.home, self.stats.goal, self.stats.other, self.stats.lock)
     
+    def compute_good_decisions(self):
+        searched = [0]*7
+        if self.prev_goal != None:
+            searched[self.prev_goal] = 1
+        search_phase = self.outreps > 1
+        for trial in self.trials:
+            if not search_phase:
+                trial.good_decision = trial.rewarded
+                if not trial.good_decision:
+                    trial.error |= Errors.repeat
+            elif trial.rewarded:
+                trial.good_decision = True
+                search_phase = False
+            elif searched[trial.outer.well]:
+                trial.good_decision = False
+                trial.error |= Errors.search
+                if trial.outer.well == self.prev_goal:
+                    trial.error |= Errors.perseverative
+            else:
+                trial.good_decision = True
+                searched[trial.outer.well] = 1
+
+
     def _load_from_log(self, lines:list, start:int) -> int:
         """Read the Data From a File Line-by-Line Starting at the Specified Index, Returning the Next Unused Index"""
         # Parse the Lines
@@ -735,11 +793,14 @@ class Epoch:
     
     rmLockoutParser = Parser("({int},{int},{int})")
     Parser.add_datatype('rmLockout', rmLockoutParser)
-    rmParamsParser = Parser("{str} {int} {int} {int} ({tuple[float, ', ']}) {int} {outreps} {int} {int} {int} {int} {int} {int} {threshold} {int} {int}")
+    rmParamsParser = Parser("{str} {int} {int} {int} ({tuple[float, ', ']}) {int} {outreps} {int} {int} {int} {int} {ep_end} {threshold} {int} {int} {int}")
     rmTrialParser = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]")
+    rmTrialParser_new = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]") # TODO: replace the old version with the new version
     Parser.add_datatype('rmParams', rmParamsParser)
     Parser.add_datatype('rmTrials', rmTrialParser)
+    Parser.add_datatype('rmTrialsNew', rmTrialParser_new) # TODO: replace the old version with the new version
     rmTDFileParser = Parser("{rmParams}\n{[rmTrials, '\n']}")
+    rmTDFileParser = Parser("{rmParams}\n{[rmTrialsNew, '\n']}") # TODO: replace the old version with the new version
     
     current = None
     
@@ -806,6 +867,8 @@ class Epoch:
             
             # Get the Pokes
             for block in self.blocks:
+                if type(self.parameters.outreps) == int:
+                    block.outreps = self.parameters.outreps
                 self.all_trials.extend(block.all_trials)
                 self.trials.extend(block.trials)
             
@@ -842,6 +905,10 @@ class Epoch:
     def compute_stats(self, recompute:bool = False) -> None:
         """Compute the home/goal/other/lock stats for the Epoch (stored in self.stats)"""
         if not self.stats.computed or recompute:
+            self.stats.home = 0
+            self.stats.outer = 0
+            self.stats.goal = 0
+            self.stats.lock = 0
             for trial in self.trials:
                 if trial.home: 
                     self.stats.home += 1
@@ -850,9 +917,14 @@ class Epoch:
                         self.stats.goal += 1
                     else:
                         self.stats.other += 1
-                self.stats.lock += len(trial.lockouts)
+                self.stats.lock += len(trial.lockouts) > 0
             self.stats.computed = True
+            self.complete = self.stats.goal + self.stats.other >= self.parameters.min_trials
     
+    def compute_good_decisions(self) -> None:
+        for block in self.blocks:
+            block.compute_good_decisions()
+
     param_vector_attributes = ['goals', 'cues', 'outreps']
     def get_param_vector(epoch) -> tuple:
         """Builds a Parameter Vector from the Attribute Names in Epoch.param_vector_attributes
@@ -868,14 +940,14 @@ class Epoch:
         # Load the Data
         file = None
         with open(self.filepath, 'r') as f:
-            file = f.readall()
+            file = f.read()
             f.close()
         
         # Parse the Data
         params, trials = Epoch.rmTDFileParser(file)
         
         # Load the Data
-        self.load_from_tables([epoch_index] + params, [[i] + row for i, row in enumerate(trials)])
+        self.load_from_tables([epoch_index] + list(params), [[i] + list(row) for i, row in enumerate(trials) if row != None])
     
     def _load_from_log(self) -> None:
         """Load Epoch Behavior Data from a Python Log"""
@@ -930,24 +1002,26 @@ class Epoch:
     
     def _load_from_ss_log(self) -> None:
         """Load Epoch Behavior Data from a StateScript Log"""
-        raise NotImplementedError()
+        raise NotImplementedError(f"unable to load {self.filename}")
     
     def _load_from_nwb_partial(self, nwb_data:bytes, start:int) -> int:
         """Load Epoch Behavior Data from an Unprocessed nwb File (returns the position of the next unused byte)"""
-        raise NotImplementedError()
+        raise NotImplementedError(f"unable to load {self.filename}")
     
     def _load_from_nwb_partial_(self, nwb_data:bytes, start:int) -> int:
         """Load Epoch Behavior Data from a Processed nwb File (returns the position of the next unused byte)"""
-        raise NotImplementedError()
+        raise NotImplementedError(f"unable to load {self.filename}")
     
     # Filename Parsers -> Data Loaders
     _filename_parsers = {
+        'rmTableData' : Parser("{int}_{str}_{int}.rmTableData"),
         'log' : Parser("{int}_{str}_{int}.log"),
-        'stateScriptLog' : Parser("{int}_{str}_{int}.stateScriptLog")
+        #'stateScriptLog' : Parser("{int}_{str}_{int}.stateScriptLog")
     }
     _file_loaders = {
+        'rmTableData' : _load_from_rmTableData,
         'log' : _load_from_log,
-        'stateScriptLog' : _load_from_ss_log
+        #'stateScriptLog' : _load_from_ss_log
     }
     _nwb_filename_parsers = [
         (_nwb_filename_parser(False), _load_from_nwb_partial),
@@ -956,7 +1030,7 @@ class Epoch:
     
     # Save the Data to an nwb File
     def save_to_nwb(self, filename:str = None, folder:str = None):
-        raise NotImplementedError()
+        raise NotImplementedError(f"unable to save {filename}")
     
     # Make the Trial Table
     def make_TrialInfo(self, include_index:bool = True):
@@ -977,17 +1051,16 @@ class Epoch:
     
     # Load the Data From Tables
     def load_from_tables(self, parameters, trials):
-        """(index), name, date, epoch_num, blocks_completed, parameter_file_version, goals, outreps, delay, goal_selection_mode, cues, forageassist, trials, success_threshold, eps_remaining"""
+        """(index), name, date, epoch_num, parameter_file_version, (arm selection params), goals, outreps, delay, goal_selection_mode, cues, forageassist, trials, success_threshold, eps_remaining"""
         
         # Load the Parameter Data
         self.index = parameters[0]
         self.name = parameters[1]
         self.date = parameters[2]
         self.epoch_number = parameters[3]
-        complete_blocks = parameters[4]
         self.parameters = ParameterFile()
-        self.parameters.version = parameters[6]
-        self.parameters.training_plan = [parameters[7:]]
+        self.parameters.version = parameters[4]
+        self.parameters.training_plan = [parameters[6:]]
         self.parameters.training_plan_index = 0
         self.parameters._set_selected_parameters()
         
@@ -1000,13 +1073,13 @@ class Epoch:
         goal = None
         for entry in trials:
             # Check if a New Goal Block has Started
-            if entry[8] != goal:
+            if entry[7] != goal:
                 # Create a Blank Block
+                goal = entry[7]
                 block = Block(self)
                 self.blocks.append(block)
-                if complete_blocks:
+                if block.trials and (block.trials[-1].reps_remaining <= 0 or block.trials[-1].reps_remaining == 1 and block.trials[-1].rewarded):
                     block.complete = True
-                    complete_blocks -= 1
             
             # Create the Trial
             trial = Trial.from_table_entry(block, entry)
@@ -1105,17 +1178,65 @@ class Epoch:
         return x
 
 class Rat:
+    def parse_filepath(filepath:str) -> tuple:
+        for suffix in Epoch._filename_parsers:
+            if filepath.endswith(suffix):
+                return Epoch._filename_parsers[suffix](filepath.split(slash)[-1])
+        return None
+    
+    def _is_bad_filename(filepath) -> bool:
+        filename = filepath.split(slash)[-1]
+        return 'BAD' in filename or 'DO_NOT_USE' in filename
+
+    def get_files(name:str, data_folder:str, recursive_search:bool = True) -> list:
+        # File Extension Priority Order
+        priority = {'rmTableData':4, 'log':3, 'nwb':2, 'stateScriptLog':1}
+        def get_priority(filepath:str) -> int:
+            for suffix, value in priority.items():
+                if filepath.endswith(suffix):
+                    return value
+            return 0
+
+        # find the data files for the current rat
+        files = []
+        for f in search(name, data_folder, True, recursive_search):
+            if not f.endswith('stateScriptLog') and not Rat._is_bad_filename(f):
+                try:
+                    x = Rat.parse_filepath(f)
+                    if x != None:
+                        files.append((f, x))
+                except:
+                    print(f"unable to parse: '{f}'")
+
+        # bucket sort the files by date/epoch number
+        files_by_epoch = {}
+        for filepath, key in files:
+            if key not in files_by_epoch:
+                files_by_epoch[key] = []
+            files_by_epoch[key].append(filepath)
+        files_by_epoch = sorted(files_by_epoch.items()) # arrance by date/epoch number
+
+        # Get the Highest Priority File for Each Epoch
+        files = [max(lf, key = get_priority) for _, lf in files_by_epoch]
+
+        # Return the Files
+        return files
+
     def __init__(self, name:str, data_folder:str, cohort, recursive_search:bool = True):
         # Store the Given Attributes
         self.name = name
         self.cohort = cohort
         
+        # Get the Files
+        files = Rat.get_files(name, data_folder, recursive_search)
+
         # Load All the Files
         self.epochs = []
-        files = search(name, data_folder, True, recursive_search)
         for filepath in files:
-            if any(filepath.endswith(suffix) for suffix in Epoch._filename_parsers):
+            try:
                 self.epochs.append(Epoch(filepath, self))
+            except:
+                print(f"unable to load '{filepath}'")
         for filepath in (f for f in files if f.endswith('.nwb')):
             self._load_nwb(filepath)
         #if len(self.epochs) > 1: self.epochs.sort(key = lambda e: (e.date, e.epoch_number))
@@ -1182,6 +1303,10 @@ class Rat:
     def has_epochs(self) -> bool:
         return len(self) > 0
     
+    def compute_good_decisions(self) -> None:
+            for epoch in self.epochs:
+                epoch.compute_good_decisions()
+
     # Make a Raster Plot of the Rat
     def raster_plot(self, axes:plt.axes = None, back_colors:list = None, alpha:float = 0.2, included:int = 0) -> int:
         """
@@ -1247,6 +1372,52 @@ class Rat:
         
         # Return the Next X Position
         return x
+    
+    def goal_rate_plot(self, axes:plt.axes = None, color:str = None, label:str = None, window:int = 150, normalize:int = 3) -> plt.figure:
+        # Initialize a New Figure (if needed)
+        is_not_subplot = axes == None
+        fig = None
+        if is_not_subplot:
+            fig, axes = plt.subplots(1, 1)
+        
+        # Get the Rewards
+        if normalize&1:
+            rewards = [trial.good_decision for epoch in self.epochs for trial in epoch.trials]
+        else:
+            rewards = [trial.rewarded for epoch in self.epochs for trial in epoch.trials]
+        
+        # Normalize the Rewards
+        if normalize&2:
+            i = 0
+            for epoch in self.epochs:
+                if abs(epoch.parameters.cues) <= abs(epoch.parameters.goals):
+                    r = abs(epoch.parameters.goals) / 6
+                else:
+                    r = abs(epoch.parameters.goals / epoch.parameters.cues)
+                
+                for trial in epoch.trials:
+                    rewards[i] = (rewards[i] - r) / (1 - r)
+                    i += 1
+
+        # Smooth the Rewards
+        y = smooth(rewards, window)
+        x = list(range(window, window + len(y)))
+
+        # Plot the Result
+        axes.plot(x, y, color = color, label = label)
+
+        # Add Axes Titles
+        if is_not_subplot:
+            plt.legend()
+            plt.xlabel('Trials')
+            rate = 'Good Decision' if normalize&1 else 'Reward'
+            norm = ' (normalize)' if normalize&2 else ''
+            plt.ylabel(f'Average {rate} Rate{norm}\n(Smoothing Window: {window} Trials)')
+            plt.show()
+        
+        # Return the Figure
+        return fig
+
 
 class Cohort:
     def __init__(self, cohort_name:str, rat_names:list, data_folder:str, study, recursive_search:bool = True):
@@ -1356,6 +1527,10 @@ class Cohort:
         """returns a dict_items list of rat_name:rat_object pairs"""
         return self.rats.items()
     
+    def compute_good_decisions(self) -> None:
+        for rat in self.rats.values():
+            rat.compute_good_decisions()
+    
     # Make a Raster Plot for the Cohort
     def raster_plot(self, axes:plt.axes = None, back_colors:str = None, alpha:float = 0.2, included:int = 0) -> int:
         """
@@ -1406,6 +1581,48 @@ class Cohort:
         
         # Return the Next X Position
         return x
+    
+    def goal_rate_plot(self, axes:plt.axes = None, color:str = None, window:int = 150, normalize:bool = True) -> plt.figure:
+        # Initialize a New Plot (if needed)
+        is_not_subplot = axes == None
+        fig = None
+        if is_not_subplot:
+            fig, axes = plt.subplots(1, 1)
+        
+        def ColorGen():
+            if type(color) == list:
+                yield from color
+                while True:
+                    yield None
+            else:
+                while True:
+                    yield color
+        colors = ColorGen()
+
+        def LabelGen():
+            if type(color) != list:
+                yield self.cohort_name
+            while True:
+                yield None
+        labels = LabelGen()
+
+        # Plot Each Rat
+        for rat in self.rats.values():
+            rat.goal_rate_plot(axes, next(colors), next(labels), window, normalize)
+        
+        # Add Axes Titles
+        if is_not_subplot:
+            plt.legend()
+            plt.xlabel('Trials')
+            rate = 'Good Decision' if normalize&1 else 'Reward'
+            norm = ' (normalize)' if normalize&2 else ''
+            plt.ylabel(f'Average {rate} Rate{norm}\n(Smoothing Window: {window} Trials)')
+            plt.show()
+
+        # Return the Figure
+        return fig
+
+
 
 class Study:
     def __init__(self, cohorts:dict, data_folder:str, arms:int = 6, study_name:str = None, recursive_search:bool = True, multithreaded:bool = False):
@@ -1447,6 +1664,9 @@ class Study:
                 for name, rat in cohort.rats.items():
                     self.cohorts['all'].rats[name] = rat
                     self.rat_names.append(name)
+        
+        # Determine if Each Trial was a Good/Bad Decision
+        self.compute_good_decisions()
     
     def _load_rat(name_folder_cohort_rsearch:tuple) -> Rat:
         return Rat(*name_folder_cohort_rsearch)
@@ -1561,8 +1781,11 @@ class Study:
         """returns a dict_items list of cohort_name:cohort_object pairs"""
         return self.cohorts.items()
     
+    def compute_good_decisions(self) -> None:
+        self.cohorts['all'].compute_good_decisions()
+    
     # Make a Raster Plot for the Cohort
-    def raster_plot(self, cohort:str = 'all', back_colors:str = None, alpha:float = 0.2, included:int = 0) -> int:
+    def raster_plot(self, cohort:str = 'all', back_colors:str = None, alpha:float = 0.2, included:int = 0) -> None:
         """
         Create a Raster PLot for the Cohort (either on its own if axes == None, or as a piece of a larger plot)
 
@@ -1583,12 +1806,41 @@ class Study:
             The default is 0.
         """
         if type(cohort) == str:
-            self.cohorts[cohort].raster_plot(1, None, back_colors, alpha, included)
+            self.cohorts[cohort].raster_plot(None, back_colors, alpha, included)
         elif type(cohort) == list:
             temp_cohort = Cohort('temp', [], None, self, False)
             for rat in cohort:
                 temp_cohort.rats[rat] = self[rat]
             temp_cohort.raster_plot(1, None, back_colors, alpha, included)
+        else:
+            raise TypeError(f"<cohort> must either be the name of a cohort (str), or a list of rat names (list), not type '{type(cohort)}'")
+
+    def goal_rate_plot(self, cohort:str = 'all', colors:list = ['violet', 'teal'], window:int = 150, normalize:bool = True) -> plt.figure:
+        if cohort == 'all':
+            fig, ax = plt.subplots(1, 1)
+            i = 0
+            for name, cohort in self.cohorts.items():
+                if name != 'all':
+                    cohort.goal_rate_plot(ax, colors[i] if i < len(colors) else None, window, normalize)
+                    i += 1
+            
+            # Add Axes Titles
+            plt.legend()
+            plt.xlabel('Trials')
+            rate = 'Good Decision' if normalize&1 else 'Reward'
+            norm = ' (normalize)' if normalize&2 else ''
+            plt.ylabel(f'Average {rate} Rate{norm}\n(Smoothing Window: {window} Trials)')
+            plt.show()
+
+            # Return the Figure
+            return fig
+        elif type(cohort) == str:
+            return self.cohorts[cohort].goal_rate_plot(None, colors, window, normalize)
+        elif type(cohort) == list:
+            temp_cohort = Cohort('temp', [], None, self, False)
+            for rat in cohort:
+                temp_cohort.rats[rat] = self[rat]
+            return temp_cohort.goal_rate_plot(None, colors, window, normalize)
         else:
             raise TypeError(f"<cohort> must either be the name of a cohort (str), or a list of rat names (list), not type '{type(cohort)}'")
 

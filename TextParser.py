@@ -483,7 +483,7 @@ class Parser:
                     return dtype(map(dtype_s, list(string)))
             elif piece[1] != None: # Ignore Discards
                 # Parse the Simple Data
-                return piece[1](string)
+                return piece[1](string) if string != 'None' else None
         elif piece[0]:
             # Create an Empty Iterable
             return piece[1]([])

@@ -104,7 +104,7 @@ def timestamp(mode:int = 3):
     return res
 
 
-def Round(x:float, ux:float, string:bool = True, fmt:int = 0):
+def Round(x:float, ux:float, string:bool = True):
     """round a number and its uncertainty to the appropriate number of sig figs (returning the result as a string if requested)"""
     # compute the power of 10 to round to
     p = -int(np.floor(np.log10(ux)))
@@ -117,15 +117,18 @@ def Round(x:float, ux:float, string:bool = True, fmt:int = 0):
     
     # check if rounding changed the power of 10 to round to (re-rounding if necessary)
     if p != -int(np.floor(np.log10(ux))):
-        return Round(x, ux, string, fmt)
+        return Round(x, ux, string)
     
     # return the result in the requested format
     if string:
-        if fmt == 0:
+        
+        if string in (1, True):
+            return f"{x} ± {ux}"
+        elif string == 2:
             ud = int(round(ux * 10**p)) if ux < 1 else ux
             return f"{x}({ud})"
-        elif fmt == 1:
-            return f"{x} ± {ux}"
+        else:
+            raise ValueError(f"Unrecognized Format Code '{string}'")
     else:
         return x, ux
 
