@@ -845,11 +845,14 @@ class Epoch:
                 return
             
             # Get the Pokes
+            self.trials = []
             for block in self.blocks:
                 if type(self.parameters.outreps) == int:
                     block.outreps = self.parameters.outreps
                 self.all_trials.extend(block.all_trials)
                 self.trials.extend(block.trials)
+            if self.trials and (not self.trials[-1].outer or self.trials[-1].outer.well == -1):
+                self.blocks[-1].trials.pop()
             
             # Compute the Stats
             self.compute_stats()
