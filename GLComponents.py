@@ -951,11 +951,9 @@ class Block:
         self.state = state
         self.trials = list(trials)
     
-    def new_trial(self, state:tuple = None, pokes:list = ()) -> Trial:
+    def add_trial(self, trial:Trial) -> None:
         """Add a New Trial to the Block"""
-        trial = Trial(len(self.trials) + 1, state, pokes)
         self.trials.append(trial)
-        return trial
     
     def up(self, well:int, rewarded:bool, t:int) -> Poke:
         """Create a New Poke"""
@@ -1105,11 +1103,10 @@ class Plotter:
         if self.trials:
             self._log(self.trials[-1])
         
-        # make sure there's a block to add trials to
-        if not self.blocks: self.new_block(state)
-        
         # create/add the trial
-        self.trials.append(self.blocks[-1].new_trial(state))
+        trial = Trial(len(self.trials) + 1, state)
+        self.trials.append(trial)
+        if self.blocks: self.blocks[-1].add_trial(trial)
     
     def add_event(self, event:any) -> None:
         """Add an arbitrary event to the current trial (plots nothing)"""

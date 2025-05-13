@@ -301,24 +301,6 @@ class Trial:
         if not self.goal and self.block: self.goal = self.block.goal
     
     def to_table_entry(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
-        """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
-        include_index |= index != None
-        return [self.index if index == None else index]*bool(include_index) + [
-            self.trial_num if trial_num == None else trial_num, 
-            self.start, 
-            self.end, 
-            int(self.rewarded), 
-            int(self.search_mode), 
-            self.outer.well if self.outer else None, 
-            self.goal, 
-            self.reps_remaining, 
-            self.home.end if self.home else None, 
-            self.outer.start if self.outer else None, 
-            self.outer.end if self.outer else None, 
-            [(poke.well, poke.start, poke.end) for poke in self.lockouts]
-        ]
-    
-    def to_table_entry_new(self, index:int = None, trial_num:int = None, include_index:bool = False) -> list:
         """(index), trial_num, start_time, end_time, outer_reward, search_mode, outer_well, goal_wells, lit_wells, reps_remaining, leave_home, outer_time, leave_outer, lockouts"""
         include_index |= index != None
         return [self.index if index == None else index]*bool(include_index) + [
@@ -794,13 +776,10 @@ class Epoch:
     rmLockoutParser = Parser("({int},{int},{int})")
     Parser.add_datatype('rmLockout', rmLockoutParser)
     rmParamsParser = Parser("{str} {int} {int} {int} ({tuple[float, ', ']}) {int} {outreps} {int} {int} {int} {int} {ep_end} {threshold} {int} {int} {int}")
-    rmTrialParser = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]")
-    rmTrialParser_new = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]") # TODO: replace the old version with the new version
+    rmTrialParser = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]")
     Parser.add_datatype('rmParams', rmParamsParser)
     Parser.add_datatype('rmTrials', rmTrialParser)
-    Parser.add_datatype('rmTrialsNew', rmTrialParser_new) # TODO: replace the old version with the new version
     rmTDFileParser = Parser("{rmParams}\n{[rmTrials, '\n']}")
-    rmTDFileParser = Parser("{rmParams}\n{[rmTrialsNew, '\n']}") # TODO: replace the old version with the new version
     
     current = None
     
