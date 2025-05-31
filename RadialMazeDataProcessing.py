@@ -775,7 +775,7 @@ class Epoch:
     
     rmLockoutParser = Parser("({int},{int},{int})")
     Parser.add_datatype('rmLockout', rmLockoutParser)
-    rmParamsParser = Parser("{str} {int} {int} {int} ({tuple[float, ', ']}) {int} {outreps} {int} {int} {int} {int} {ep_end} {threshold} {int} {int} {int}")
+    rmParamsParser = Parser("{str}\t{int}\t{int}\t{int}\t({tuple[float, ', ']})\t{int}\t{outreps}\t{int}\t{int}\t{int}\t{int}\t{ep_end}\t{threshold}\t{int}\t{int}\t{int}")
     rmTrialParser = Parser("{int}\t{int}\t{int}\t{int}\t{int}\t{int}\t[{[int, ', ']}]\t[{[int, ', ']}]\t{int}\t{int}\t{int}\t{int}\t[{[rmLockout, ', ']}]")
     Parser.add_datatype('rmParams', rmParamsParser)
     Parser.add_datatype('rmTrials', rmTrialParser)
