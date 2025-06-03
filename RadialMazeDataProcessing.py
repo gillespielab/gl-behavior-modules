@@ -329,12 +329,13 @@ class Trial:
         trial.end = entry[3]
         trial.rewarded = entry[4]
         trial.goal = entry[7]
-        trial.reps_remaining = entry[8]
-        trial.add_home(Poke(home_well, True, entry[5], 0, entry[7], trial.start, entry[9], trial))
+        trial.leds = entry[8]
+        trial.reps_remaining = entry[9]
+        trial.add_home(Poke(home_well, True, entry[5], 0, entry[7], trial.start, entry[10], trial))
         if entry[6] != None:
-            trial.add_outer(Poke(entry[6], trial.rewarded, entry[5], 1, entry[7], entry[10], entry[11], trial))
+            trial.add_outer(Poke(entry[6], trial.rewarded, entry[5], 1, entry[7], entry[11], entry[12], trial))
         phase = 0
-        for well, t_start, t_end in entry[12]:
+        for well, t_start, t_end in entry[13]:
             trial.add_lockout(Poke(well, 0, entry[5], phase, entry[7], t_start, t_end, trial))
             phase = 2
         
