@@ -532,15 +532,15 @@ class Block:
             for t in self.trials:
                 t.reps_remaining = reps_remaining
                 if t.rewarded: reps_remaining -= 1
-        elif self.trials and self.trials[0].reps_remaining > 0:
+        elif self.trials and self.outreps == None and self.trials[0].reps_remaining > 0:
             self.outreps = self.trials[0].reps_remaining
             if complete == None:
                 self._on_load() # self.outreps evals to True in the recursion since reps_remaining > 0
                 return
-        elif self.trials and self.outreps == None:
-            self.outreps = self.trials[0].reps_remaining
 
         self.complete = (not reps_remaining) if complete == None else complete
+        if not self.complete and self.trials and self.outreps != None:
+            self.complete = sum(t.rewarded for t in self.trials) == self.outreps
 
         self.compute_stats()
     
@@ -604,6 +604,81 @@ class Block:
         
         # Return the Next Index in the File
         return i + 1
+    
+    def _load_from_ss_log(self, lines:list, start:int) -> int:
+        # Line Parsers
+        up_parser = Parser("{int} UP {int}")
+        reward_parser = Parser("{int} well {int} poked; reward given = {bool}")
+        state_parser = Parser("{int} {int} {int}")
+        epoch_end_parser = Parser("{int} epoch complete: {str}")
+        block_start_parser = Parser("{int} new goal block: [goal = [{[int, ', ']}], outreps = {int}]")
+        lockend_parser = Parser("{int} LOCKEND")
+        
+        # Get the Block Info
+        _, self.goal, self.outreps = block_start_parser(lines[start])
+        
+        # Look for the Start of Trials, the Start of the Next Goal Block, or the End of the Epoch
+        search_phase = 1
+        current_trial = None
+        current_poke = None
+        i = start + 1
+        lockedout = False
+        leds_mask = 63 # int("111111", 2)
+        leds_found = False
+        while not block_start_parser.match(lines[i]) and not epoch_end_parser.match(lines[i]):
+            line = lines[i]
+            i += 1
+            if up_parser.match(line):
+                # get the well that was poked
+                t, well = up_parser(line)
+                well = well%7
+                
+                # make a new poke object
+                current_poke = Poke(well, False, search_phase, -1, self.goal, t, None, current_trial)
+                
+                # check what to do with the poke
+                if lockedout:
+                    current_trial.add_lockout(current_poke)
+                elif well == 0:
+                    if current_trial != None:
+                        current_trial._on_load()
+                    current_trial = Trial(self, current_poke)
+                    current_poke.trial = current_trial
+                    self.trials.append(current_trial)
+                elif current_trial.outer != None:
+                    current_trial.add_lockout(current_poke)
+                    lockedout = True
+                else:
+                    current_trial.add_outer(current_poke)
+            elif reward_parser.match(line):
+                _, well, rewarded = reward_parser(line)
+                if well != current_poke.well:
+                    print("warning: well numbers do not match, missing poke start?")
+                current_poke.rewarded = rewarded
+                if well%7 != 0 and rewarded:
+                    search_phase = 0
+            elif not leds_found and state_parser.match(line):
+                _, _, outputs = state_parser(line)
+                leds = outputs&leds_mask
+                self.leds = []
+                led = 1
+                while leds:
+                    if leds&1:
+                        self.leds.append(led)
+                    led += 1
+                    leds >>= 1
+                if len(self.leds) != self.epoch.parameters.cues:
+                    self.leds = []
+                else:
+                    leds_found = True
+            elif lockedout and lockend_parser.match(line):
+                lockedout = False
+        
+        # Cleanup
+        self._on_load(sum(t.rewarded for t in self.trials) == self.outreps)
+        
+        # Return the Index
+        return i
     
     def get_phases(self, included:int, is_good_repetition = None, is_memory_lapse = None) -> list:
         
@@ -985,7 +1060,59 @@ class Epoch:
     
     def _load_from_ss_log(self) -> None:
         """Load Epoch Behavior Data from a StateScript Log"""
-        raise NotImplementedError(f"unable to load {self.filename}")
+        
+        # Read the File
+        self.lines = readlines(self.filepath)
+        
+        # Line Parsers
+        params_parser = Parser("{int} params: [goals: {int}, outreps: {outreps}, delay: {int}, arm selection mode: {int}, cues: {int}, forageassist: {int}, end criteria: [{int}, {int}], success_threshold: {float}, epochs_remaining: [{int}, {int}], timeout: {int}]")
+        training_plan_index_parser = Parser("{int} Training Plan Index: {int}")
+        epoch_end_parser = Parser("{int} epoch complete: {str}")
+        block_start_parser = Parser("{int} new goal block: [goal = [{[int, ', ']}], outreps = {int}]")
+        
+        # Read the Parameter Info
+        i = 0
+        headers_found = 0
+        while i < len(self.lines):
+            # Get the Current Line
+            line = self.lines[i]
+            
+            # Check if it Matches Header Info, or a Block Start
+            if not headers_found&1 and params_parser.match(line):
+                params = params_parser(line)
+                headers_found |= 1
+                self.parameters = ParameterFile()
+                self.parameters.goals = params[1]
+                self.parameters.outreps = params[2]
+                self.parameters.delay = params[3]
+                self.parameters.goal_selection_mode = params[4]
+                self.parameters.cues = params[5]
+                self.parameters.forageassist = params[6]
+                self.parameters.epoch_end_criteria = tuple(params[7:9])
+                self.parameters.min_trials = params[7]
+                self.parameters.max_trials = params[8]
+                self.parameters.success_threshold = params[9]
+                self.parameters.successful_epochs_remaining = params[10]
+                self.parameters.max_epochs_remaining = params[11]
+                self.parameters.timeout = params[12]
+                i += 1
+            elif not headers_found&2 and training_plan_index_parser.match(line):
+                _, self.parameters.training_plan_index = training_plan_index_parser(line)
+                headers_found |= 2
+                i += 1
+            elif block_start_parser.match(line):
+                block = Block(self, len(self.blocks))
+                self.blocks.append(block)
+                i = block._load_from_ss_log(self.lines, i)
+            elif epoch_end_parser.match(line):
+                break
+            else:
+                i += 1
+        
+        self.all_trials = self.trials
+        
+        for block in self.blocks:
+            block._on_load()
     
     def _load_from_nwb_partial(self, nwb_data:bytes, start:int) -> int:
         """Load Epoch Behavior Data from an Unprocessed nwb File (returns the position of the next unused byte)"""
@@ -999,12 +1126,12 @@ class Epoch:
     _filename_parsers = {
         'rmTableData' : Parser("{int}_{str}_{int}.rmTableData"),
         'log' : Parser("{int}_{str}_{int}.log"),
-        #'stateScriptLog' : Parser("{int}_{str}_{int}.stateScriptLog")
+        'stateScriptLog' : Parser("{int}_{str}_{int}.stateScriptLog")
     }
     _file_loaders = {
         'rmTableData' : _load_from_rmTableData,
         'log' : _load_from_log,
-        #'stateScriptLog' : _load_from_ss_log
+        'stateScriptLog' : _load_from_ss_log
     }
     _nwb_filename_parsers = [
         (_nwb_filename_parser(False), _load_from_nwb_partial),
