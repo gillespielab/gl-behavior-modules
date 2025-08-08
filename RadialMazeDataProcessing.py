@@ -608,6 +608,7 @@ class Block:
     def _load_from_ss_log(self, lines:list, start:int) -> int:
         # Line Parsers
         up_parser = Parser("{int} UP {int}")
+        down_parser = Parser("{int} DOWN {int}")
         reward_parser = Parser("{int} well {int} poked; reward given = {bool}")
         state_parser = Parser("{int} {int} {int}")
         epoch_end_parser = Parser("{int} epoch complete: {str}")
@@ -642,6 +643,7 @@ class Block:
                 elif well == 0:
                     if current_trial != None:
                         current_trial._on_load()
+                        current_trial.end = t
                     current_trial = Trial(self, current_poke)
                     current_poke.trial = current_trial
                     self.trials.append(current_trial)
@@ -650,6 +652,14 @@ class Block:
                     lockedout = True
                 else:
                     current_trial.add_outer(current_poke)
+            if current_poke != None and down_parser.match(line):
+                t, well = down_parser(line)
+                well = well%7
+                if well != current_poke.well:
+                    print("warning: well numbers do not match, missing poke start/end?")
+                current_poke.end = t
+                if current_trial != None:
+                    current_trial.end = t
             elif reward_parser.match(line):
                 _, well, rewarded = reward_parser(line)
                 if well != current_poke.well:
