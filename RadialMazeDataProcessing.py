@@ -85,7 +85,7 @@ class Line:
     command_parser = Parser("SCQTMESSAGE: {str};")  #  commands to StateScript
     state_parser = Parser("{int} {int} {int}")      #  state updates from StateScript
     callback_parser = Parser("{int} {str} {int}")   #  callbacks from StateScript (regex overridden)
-    callback_parser.regex = re.compile("^\d+ (UP|DOWN|LOCKOUT|LOCKEND)")
+    callback_parser.regex = re.compile(r"^\d+ (UP|DOWN|LOCKOUT|LOCKEND)")
     poke_parser = Parser("well {int} poked; reward given = {int}")
     
     def __init__(self, line:str):
@@ -537,6 +537,14 @@ class Block:
             if complete == None:
                 self._on_load() # self.outreps evals to True in the recursion since reps_remaining > 0
                 return
+        elif self.trials and self.outreps == None:
+            # this can be hit when loading from rmTableData files
+            self.outreps = max((t.reps_remaining for t in self.trials if t.reps_remaining != None), default = None)
+            if complete == None and self.trials[0].reps_remaining == 0 and self.previous != None:
+                # this fixes an edge case in the trial.reps_remaining
+                self.previous.trials.append(self.trials.pop(0))
+                self.previous._on_load()
+                return
 
         self.complete = (not reps_remaining) if complete == None else complete
         if not self.complete and self.trials and self.outreps != None:
@@ -819,7 +827,7 @@ class Block:
 class _nwb_filename_parser:
     def __init__(self, underscore:bool = False):
         self.underscore = bool(underscore)
-        self.regex = r'^.*?\d+' + '_'*self.underscore + '\.nwb'
+        self.regex = r'^.*?\d+' + '_'*self.underscore + r'\.nwb'
     
     def parse(self, filename:str, safe:bool = False) -> tuple:
         # Check Safe Mode
@@ -990,8 +998,11 @@ class Epoch:
             self.complete = self.stats.goal + self.stats.other >= self.parameters.min_trials
     
     def compute_good_decisions(self) -> None:
-        for block in self.blocks:
-            block.compute_good_decisions()
+        for i, block in enumerate(self.blocks):
+            try:
+                block.compute_good_decisions()
+            except:
+                print(f"Warning: Unable to Compute Good Decision Rate for '{self.filepath}' Block {i} (0-indexed)")
 
     param_vector_attributes = ['goals', 'cues', 'outreps']
     def get_param_vector(epoch) -> tuple:
