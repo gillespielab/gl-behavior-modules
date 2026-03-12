@@ -1,0 +1,29 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: gl-behavior-modules
+message: 'If you use this software, please cite it as below.'
+type: software
+authors:
+  - family-names: Saathoff
+    given-names: Violet
+    email: violetsaathoff628@gmail.com
+    affiliation: University of Washington
+    orcid: 'https://orcid.org/0009-0005-4962-0440'
+  - family-names: Gillespie
+    given-names: Anna
+    email: annagill@uw.edu
+    affiliation: University of Washington
+    orcid: 'https://orcid.org/0000-0003-0980-2408'
+abstract: Accessory codebase to run the 6arm parallelized maze system
+keywords:
+  - neuroscience
+  - spatial navigation
+  - rodent
+  - behavior
+  - automation
+license: CC-BY-NC-4.0
+commit: 5eacdb55d544b9669bd73cefb17cdfd41abe00b2
+version: 1.0.0
+date-released: '2026-03-12'
