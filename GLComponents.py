@@ -712,8 +712,13 @@ class FileDrivenMaze(ParameterFile):
         arms = self.arms if hasattr(self, 'arms') else len(self.rewarded_visits)
         self.delta_prime = self.delta / (1 - arms * self.delta)
         outreps = sum(self.outreps)/len(self.outreps) if hasattr(self.outreps, '__iter__') else self.outreps
-        trials = self.max_trials if self.max_trials > -1 else outreps * self.goal_blocks / self.success_threshold
-        self.gamma_prime = self.gamma ** (1 / trials)
+        if self.max_trials > -1:
+            trials = self.max_trials
+        elif self.goal_blocks > 0 and self.success_threshold:
+            trials = outreps * self.goal_blocks / self.success_threshold
+        else:
+            trials = 0
+        self.gamma_prime = self.gamma ** (1 / trials) if trials > 0 else 0.8
         
         # Check for Bad Parameter Combos
         if self.cues and max(self.goals, self.forageassist) > abs(self.cues):
@@ -732,15 +737,20 @@ class FileDrivenMaze(ParameterFile):
         """checks if the epoch timed out (returns true if enough time has passed regardless of the number of trials completed)"""
         return self.get_epoch_time() > self.timeout + self.timeout_grace_period
     
-    def get_outreps(self):
+    def get_outreps(self, ):
         if type(self.outreps) == int:
             return self.outreps
         elif type(self.outreps) == tuple and len(self.outreps) == 2:
             return randint(*self.outreps)
         elif type(self.outreps) == list and self.outreps:
-            return choice(self.outreps)
+             # Initialize the sequence if it doesn't exist
+            if not hasattr(self, 'outreps_sequence'):
+                self.outreps_sequence = self.outreps.copy()
+                shuffle(self.outreps_sequence)
+            # Return the next value from the sequence
+            return self.outreps_sequence.pop()
         else:
-            outreps = 1 if self.cued == 1 else 15
+            outreps = 1 if self.cues == 1 else 15
             ssi.disp(f"unrecognized value for outreps. defaulting to {outreps}")
             return outreps
     
